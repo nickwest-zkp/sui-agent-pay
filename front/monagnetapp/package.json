@@ -1,0 +1,27 @@
+{
+  "name": "sui-agent-pay-front",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --dir packages/nextjs build",
+    "check-types": "pnpm --dir packages/nextjs check-types",
+    "dev": "pnpm --dir packages/nextjs dev",
+    "format": "pnpm --dir packages/nextjs format",
+    "lint": "pnpm --dir packages/nextjs lint",
+    "install:web": "pnpm --dir packages/nextjs install --ignore-workspace",
+    "precommit": "lint-staged",
+    "serve": "pnpm --dir packages/nextjs serve",
+    "start": "pnpm --dir packages/nextjs dev",
+    "vercel": "pnpm --dir packages/nextjs vercel",
+    "vercel:login": "pnpm --dir packages/nextjs vercel:login",
+    "vercel:yolo": "pnpm --dir packages/nextjs vercel:yolo"
+  },
+  "devDependencies": {
+    "husky": "~9.1.6",
+    "lint-staged": "~13.2.2"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20.18.3"
+  }
+}

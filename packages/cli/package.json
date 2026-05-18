@@ -1,0 +1,23 @@
+{
+  "name": "@sui-agent-pay/cli",
+  "version": "0.1.0",
+  "description": "CLI tool for sui-agent-pay",
+  "main": "dist/index.js",
+  "bin": {
+    "sui-agent-pay": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@sui-agent-pay/sdk": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}

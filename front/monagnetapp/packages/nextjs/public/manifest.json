@@ -1,0 +1,5 @@
+{
+  "name": "Sui Agent Pay",
+  "description": "A Move-native agent wallet console for Sui.",
+  "iconPath": "logo.svg"
+}

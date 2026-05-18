@@ -1,0 +1,22 @@
+# dependencies
+node_modules
+
+# eslint
+.eslintcache
+
+# misc
+.DS_Store
+
+# IDE
+.vscode
+.idea
+
+# cli
+dist
+
+# local package-manager artifacts
+.yarn/
+package-lock.json
+
+# next build output
+.next/

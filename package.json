@@ -1,0 +1,20 @@
+{
+  "name": "sui-agent-pay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-native secure payment system on Sui",
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3"]
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:sui:move": "cd sui && sui move build",
+    "build:sdk": "cd packages/sdk && pnpm build",
+    "build:cli": "cd packages/cli && pnpm build",
+    "build:mcp": "cd packages/mcp-server && pnpm build"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}

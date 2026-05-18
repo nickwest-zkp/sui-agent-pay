@@ -1,0 +1,21 @@
+{
+  "name": "@sui-agent-pay/sdk",
+  "version": "0.1.0",
+  "description": "Agent-native payment SDK for Sui — policy engine, AI risk, on-chain execution",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@mysten/sui": "^2.16.0",
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}

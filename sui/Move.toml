@@ -1,0 +1,12 @@
+[package]
+name = "agent_pay"
+version = "0.0.1"
+edition = "2024.beta"
+
+[addresses]
+agent_pay = "0x0"
+
+[dependencies]
+# Temporary offline fallback for this workstation. Replace with a repo-portable
+# dependency source once GitHub access is available again.
+Sui = { local = "C:/Users/zhitong/.move/git/https___github_com_MystenLabs_sui_git_75515e79e182c37b135a9984c6c1f08a2c383736/crates/sui-framework/packages/sui-framework" }
