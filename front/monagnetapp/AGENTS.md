@@ -4,22 +4,11 @@ This file describes the current frontend subtree for coding agents.
 
 ## Scope
 
-`front/monagnetapp` is no longer a Scaffold-ETH workspace. It is a pnpm-based Sui frontend subtree.
+`front/monagnetapp` is a pnpm-based Sui frontend subtree.
 
 ## Active Package
 
 - `packages/nextjs`: Next.js App Router frontend for Sui Agent Pay
-
-## Removed Stack
-
-Do not assume the following still exist or should be restored:
-
-- Hardhat
-- Foundry
-- Wagmi
-- RainbowKit
-- EVM contract pages
-- Scaffold-ETH utilities
 
 ## Key Runtime Split
 

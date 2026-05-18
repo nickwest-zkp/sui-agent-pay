@@ -1,6 +1,6 @@
 # Sui Agent Pay Frontend
 
-This subtree is now a Sui-only frontend workspace. The previous Scaffold-ETH, Hardhat, Wagmi, and EVM-specific pages have been removed.
+This subtree is the Sui-only frontend workspace for Agent Pay.
 
 ## Structure
 

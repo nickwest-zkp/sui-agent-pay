@@ -6,14 +6,6 @@ This subtree is the Sui frontend workspace for Agent Pay.
 
 The maintained app lives in `packages/nextjs`.
 
-Please do not reintroduce the removed stack:
-
-- Hardhat
-- Wagmi
-- RainbowKit
-- Scaffold-ETH helpers
-- EVM-only pages or config
-
 ## Local Setup
 
 From `front/monagnetapp`:

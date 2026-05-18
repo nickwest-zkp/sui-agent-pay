@@ -4,7 +4,7 @@ The active backend runtime is now Sui-only.
 
 ## Current state
 
-- `packages/sdk` no longer depends on `viem` or the old EVM contract client.
+- `packages/sdk` uses `SuiChainClient` for wallet, vault, and settlement operations.
 - `AgentPaySDK` now routes wallet actions through `SuiChainClient`.
 - `packages/cli` and `packages/mcp-server` now load `SUI_*` env vars and use the renamed `@sui-agent-pay/*` workspace packages.
 - `sui/` contains the Move package that backs the current vault and registry flow.

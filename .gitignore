@@ -29,12 +29,8 @@ front/monagnetapp/packages/nextjs/.next-prod/
 packages/*/dist/
 packages/*/build/
 
-# Sui / Move / Foundry artifacts
+# Sui / Move artifacts
 sui/build/
-contracts/out/
-contracts/cache/
-contracts/broadcast/
-contracts/lib/
 
 # Local runtime state
 *.db
