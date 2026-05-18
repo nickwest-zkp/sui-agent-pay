@@ -36,7 +36,7 @@ DB_PATH=/absolute/path/to/agent-pay.db
 
 ## Commands
 
-From `front/monagnetapp`:
+From `front/agentpayapp`:
 
 ```bash
 pnpm install:web

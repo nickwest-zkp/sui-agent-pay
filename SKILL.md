@@ -1,173 +1,68 @@
 ---
 name: agent-pay
-description: Agent-native secure payment system on Monad. Provides session-key-based restricted vault, dual-layer policy engine (hard rules + AI risk), full audit trail. Exposed as MCP tools, CLI, and TypeScript SDK for any AI Agent to call.
+description: Agent-native secure payment system on Sui. Provides session-key-based vault controls, policy evaluation, audit logging, MCP tools, CLI, and a TypeScript SDK for agent-driven payment flows.
 ---
 
-# monad-agent-pay SKILL
+# Sui Agent Pay Skill
 
-> Secure on-chain payment capabilities for AI Agents on Monad.
+> Secure on-chain payment capabilities for AI agents on Sui.
 
 ## What This Skill Provides
 
-11 MCP tools that let any AI Agent manage payments safely:
+- Vault creation and shared object management
+- Session key registration, funding, and revocation
+- Policy-based payment requests with approval escalation
+- Local audit log and approval tracking
+- x402 paid-service request and verification flow
+- MCP, CLI, and SDK entry points over the same backend primitives
 
-| Tool | Description |
-|------|-------------|
-| `create_agent` | Create agent with session key + on-chain registration |
-| `request_payment` | Payment through dual-layer policy engine → on-chain execution |
-| `rotate_session_key` | Atomic session key rotation (revoke old + register new) |
-| `revoke_session_key` | Permanently revoke an agent's payment capability |
-| `get_session_info` | Query on-chain session key status (limits, spent, expiry) |
-| `list_agents` | List all registered agents |
-| `get_audit_log` | Full audit trail with policy decisions + AI risk scores |
-| `emergency_pause` | Stop all vault operations immediately |
-| `unpause` | Resume vault after emergency pause |
-| `deposit` | Deposit native MON into the vault |
-| `withdraw` | Withdraw tokens from the vault |
+## Active Stack
 
-## Architecture
+- `sui/`: Move package with `agent_vault` and `agent_registry`
+- `packages/sdk/`: TypeScript SDK
+- `packages/cli/`: local operator CLI
+- `packages/mcp-server/`: MCP server for agent integration
+- `front/agentpayapp/packages/nextjs/`: dashboard and demo runtime
 
-```
-Agent (Claude / Codex / Manus / ...)
-  │
-  ▼
-MCP Server / CLI
-  │
-  ▼
-┌─────────────────────────────────┐
-│         SDK Orchestrator         │
-│                                  │
-│  ┌───────────┐ ┌──────────────┐ │
-│  │ Hard Rules │ │ AI Risk Eval │ │
-│  │ (deny/     │ │ (restrict    │ │
-│  │  allow/    │ │  only, never │ │
-│  │  escalate) │ │  expand)     │ │
-│  └─────┬─────┘ └──────┬───────┘ │
-│        └──────┬───────┘          │
-│               ▼                  │
-│     Decision Aggregator          │
-│     ┌──────────────────┐        │
-│     │ hard=deny → deny │        │
-│     │ allow+low → allow│        │
-│     │ allow+med → ask  │        │
-│     │ allow+high→ deny │        │
-│     └──────────────────┘        │
-│               │                  │
-│               ▼                  │
-│        Audit Logger              │
-└───────────────┬─────────────────┘
-                │
-                ▼
-   AgentPaymentVault.sol (Monad)
-   Session Key → Restricted Payment
-```
+## Core Security Model
 
-## Security Model
+- Funds live in the vault object, not in the session key wallet
+- Session keys are constrained by amount, expiry, and recipient policy
+- Hard policy and risk evaluation decide whether to allow, deny, or escalate
+- Every request is written to the audit log
+- Human approval can be routed through Telegram for demo purposes
 
-- **Vault pattern**: Assets live in the smart contract, session keys are just authorized signers in a mapping — rotation doesn't move funds.
-- **Dual-layer policy**: Hard deterministic rules (boundaries) + AI probabilistic risk (behavioral anomaly, split-tx detection, prompt injection detection). AI can only restrict, never expand permissions.
-- **Session keys**: Time-limited, amount-capped, recipient/token-whitelisted. Atomic rotation without fund movement.
-- **Emergency brake**: Owner can pause all operations instantly.
-
-## Setup
-
-### 1. Deploy the Vault Contract
+## Local Setup
 
 ```bash
-cd contracts
-forge build
-forge script script/Deploy.s.sol --rpc-url $MONAD_RPC_URL --broadcast --private-key $OWNER_KEY
-```
-
-### 2. Install Dependencies
-
-```bash
-cd monad-agent-pay
 pnpm install
 pnpm build
+pnpm build:sui:move
 ```
 
-### 3. Configure
+## Required Environment
 
-Copy `.env.example` to `.env` and set `VAULT_ADDRESS` and `OWNER_PRIVATE_KEY`.
+```bash
+SUI_NETWORK=sui-testnet
+SUI_FULLNODE_URL=https://fullnode.testnet.sui.io:443
+SUI_MOVE_PACKAGE_ID=0x...
+SUI_VAULT_ID=0x...
+SUI_REGISTRY_ID=0x...
+SUI_COIN_TYPE=0x2::sui::SUI
+OWNER_ADDRESS=0x...
+DB_PATH=/absolute/path/to/agent-pay.db
+```
 
-### 4. Use via MCP (recommended for Agents)
-
-Add to your MCP config (e.g., `claude_desktop_config.json`):
+## MCP Example
 
 ```json
 {
   "mcpServers": {
-    "monad-agent-pay": {
+    "sui-agent-pay": {
       "command": "node",
-      "args": ["path/to/monad-agent-pay/packages/mcp-server/dist/server.js"],
-      "env": {
-        "VAULT_ADDRESS": "0x...",
-        "MONAD_NETWORK": "monad-testnet"
-      }
+      "args": ["packages/mcp-server/dist/server.js"],
+      "cwd": "/absolute/path/to/sui-agent-pay"
     }
   }
 }
-```
-
-### 5. Use via CLI
-
-```bash
-# Create agent
-agent-pay create-agent --label "shopping-bot" --type long_lived --user user1 --owner-key 0x...
-
-# Make payment
-agent-pay request-payment --agent-id <id> --task-id task1 \
-  --reason "API subscription fee" --recipient 0x... \
-  --token 0x... --amount 1000000 --session-key 0x...
-
-# View audit log
-agent-pay audit-log --agent-id <id>
-
-# Emergency stop
-agent-pay emergency-pause --owner-key 0x...
-```
-
-## Demo Flow (4 Paths)
-
-1. **Normal payment** — under threshold, passes hard rules, AI risk low → auto-execute
-2. **Over-budget deny** — exceeds daily budget → hard-rule deny, no on-chain call
-3. **AI suspicion** — split-transaction pattern detected → require_approval
-4. **Emergency pause** — owner pauses vault → all payments stop
-
-## Monad-Specific Features
-
-- **400ms blocks / 800ms finality** — near-instant payment confirmation
-- **Async execution** — 1.2s delay for new fund availability after deposit
-- **Reserve balance** — 10 MON kept per EOA for gas
-- **Gas charged on gas_limit** — SDK estimates carefully to minimize cost
-- **`eth_sendRawTransactionSync`** — optional synchronous tx submission
-
-## Project Structure
-
-```
-monad-agent-pay/
-├── contracts/                  # Solidity + Foundry
-│   ├── src/AgentPaymentVault.sol
-│   ├── test/AgentPaymentVault.t.sol
-│   └── script/Deploy.s.sol
-├── packages/
-│   ├── sdk/                    # Core TypeScript SDK
-│   │   └── src/
-│   │       ├── index.ts        # SDK orchestrator
-│   │       ├── types.ts        # Shared types
-│   │       ├── core/
-│   │       │   ├── policy-engine.ts
-│   │       │   ├── ai-risk-evaluator.ts
-│   │       │   ├── decision-aggregator.ts
-│   │       │   └── audit-logger.ts
-│   │       ├── chain/
-│   │       │   └── contract-client.ts
-│   │       └── storage/
-│   │           └── sqlite.ts
-│   ├── cli/                    # CLI wrapper
-│   │   └── src/index.ts
-│   └── mcp-server/             # MCP server
-│       └── src/server.ts
-└── .env.example
 ```

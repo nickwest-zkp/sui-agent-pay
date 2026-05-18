@@ -8,7 +8,7 @@ The maintained app lives in `packages/nextjs`.
 
 ## Local Setup
 
-From `front/monagnetapp`:
+From `front/agentpayapp`:
 
 ```bash
 pnpm install:web

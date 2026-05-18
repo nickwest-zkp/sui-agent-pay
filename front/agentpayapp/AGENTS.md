@@ -4,7 +4,7 @@ This file describes the current frontend subtree for coding agents.
 
 ## Scope
 
-`front/monagnetapp` is a pnpm-based Sui frontend subtree.
+`front/agentpayapp` is a pnpm-based Sui frontend subtree.
 
 ## Active Package
 
@@ -19,7 +19,7 @@ This file describes the current frontend subtree for coding agents.
 
 ## Commands
 
-Run commands from `front/monagnetapp`:
+Run commands from `front/agentpayapp`:
 
 ```bash
 pnpm install:web

@@ -1,4 +1,4 @@
-# MonAgentPay Frontend Mapping
+# Sui Agent Pay Frontend Mapping
 
 This document maps the current Sui frontend to the backend SDK and Move-based payment flow.
 
