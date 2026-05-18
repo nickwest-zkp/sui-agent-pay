@@ -74,5 +74,3 @@ Current MCP tools include wallet connect/balance, vault creation, registry creat
 ## Notes
 
 - `sui/Move.toml` currently points to a local cached Sui framework path on this workstation because remote GitHub fetches are failing here.
-- The old EVM runtime is no longer part of the active SDK/CLI/MCP path.
-- The legacy frontend and some old demo files are still present in the repo and can be cleaned separately.

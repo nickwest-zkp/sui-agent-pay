@@ -21,4 +21,3 @@ The active backend runtime is now Sui-only.
 1. Registry reputation read APIs are still stubbed in the SDK. Write-paths exist, but query-paths need dynamic-field reads or an indexer.
 2. `get_session_info` currently reflects local tracked policy state, not a full on-chain table read.
 3. `sui/Move.toml` uses a machine-local cached Sui dependency path to work around current GitHub access failures.
-4. The legacy frontend and some old repo content are still present and should be cleaned in a later pass if you want the repo fully Sui-only.
