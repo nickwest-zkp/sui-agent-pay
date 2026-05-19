@@ -6,8 +6,11 @@ import {
   type SuiCreateRegistryParams,
   type SuiCreateVaultParams,
   type SuiDepositParams,
+  type SuiExecuteDeepBookSwapParams,
   type SuiExecutePaymentParams,
+  type SuiExecuteMoveCallParams,
   type SuiGiveFeedbackParams,
+  type SuiMoveCallArg,
   type SuiRegisterAgentParams,
   type SuiRegisterSessionKeyParams,
   type SuiRevokeSessionKeyParams,
@@ -24,16 +27,21 @@ interface SuiKeypairLike {
 interface SuiTransactionLike {
   setSenderIfNotSet(sender: string): void;
   build(args?: unknown): Promise<Uint8Array>;
+  gas: unknown;
   moveCall(args: {
     target: string;
     typeArguments?: string[];
     arguments?: unknown[];
   }): unknown;
+  splitCoins(coin: unknown, amounts: unknown[]): unknown[];
+  mergeCoins(destination: unknown, sources: unknown[]): unknown;
+  transferObjects(objects: unknown[], recipient: unknown): void;
   object(value: string): unknown;
   pure: {
     u64(value: string): unknown;
     address(value: string): unknown;
     string(value: string): unknown;
+    bool(value: boolean): unknown;
   };
 }
 
@@ -50,7 +58,8 @@ interface SuiClientLike {
     }): Promise<unknown>;
   };
   getBalance(args: { owner: string; coinType: string }): Promise<unknown>;
-  listCoins(args: { owner: string; coinType: string }): Promise<unknown>;
+  listBalances(args: { owner: string }): Promise<unknown>;
+  listCoins(args: { owner: string; coinType?: string }): Promise<unknown>;
   getTransaction(args: {
     digest: string;
     include?: {
@@ -283,6 +292,11 @@ export class SuiChainClient {
     return client.listCoins({ owner, coinType });
   }
 
+  async listBalances(owner: string) {
+    const client = await this.getClient();
+    return client.listBalances({ owner });
+  }
+
   async getTransaction(digest: string) {
     const client = await this.getClient();
     return client.getTransaction({
@@ -401,6 +415,213 @@ export class SuiChainClient {
       ],
     });
     return this.executeTransaction(tx, params.signerSecretKey);
+  }
+
+  private buildMoveCallArgument(tx: SuiTransactionLike, arg: SuiMoveCallArg, index: number): unknown {
+    switch (arg.kind) {
+      case "object":
+        return tx.object(String(arg.value));
+      case "address":
+        return tx.pure.address(String(arg.value));
+      case "u64":
+        return tx.pure.u64(toBigIntString(arg.value as string));
+      case "string":
+        return tx.pure.string(String(arg.value));
+      case "bool":
+        if (typeof arg.value !== "boolean") {
+          throw new Error(`Contract call argument ${index} must use a boolean value`);
+        }
+        return tx.pure.bool(arg.value);
+      default:
+        throw new Error(`Unsupported contract call argument kind: ${(arg as SuiMoveCallArg).kind}`);
+    }
+  }
+
+  async executeMoveCall(
+    params: SuiExecuteMoveCallParams
+  ): Promise<SuiTransactionExecutionResult> {
+    const { Transaction } = await loadSuiRuntime();
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${params.packageId}::${params.module}::${params.functionName}`,
+      typeArguments: params.typeArguments ?? [],
+      arguments: (params.arguments ?? []).map((arg, index) => this.buildMoveCallArgument(tx, arg, index)),
+    });
+    return this.executeTransaction(tx, params.signerSecretKey);
+  }
+
+  async executeDeepBookSwap(
+    params: SuiExecuteDeepBookSwapParams
+  ): Promise<SuiTransactionExecutionResult> {
+    if (params.inputCoinType !== SUI_TYPE_ARG) {
+      throw new Error(`DeepBook demo currently supports only ${SUI_TYPE_ARG} as the input coin`);
+    }
+
+    const [{ Transaction }, signer] = await Promise.all([
+      loadSuiRuntime(),
+      toKeypair(params.signerSecretKey),
+    ]);
+    const tx = new Transaction() as SuiTransactionLike;
+    const sender = signer.toSuiAddress();
+    const [inputCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(toBigIntString(params.inputAmount))]);
+
+    let currentCoin: unknown = inputCoin;
+    const returnCoins: unknown[] = [];
+
+    for (const hop of params.route) {
+      const deepFeeCoin = tx.moveCall({
+        target: "0x2::coin::zero",
+        typeArguments: [params.deepCoinType],
+      });
+
+      if (hop.direction === "base_to_quote") {
+        const [baseOut, quoteOut, deepOut] = tx.moveCall({
+          target: `${params.packageId}::pool::swap_exact_base_for_quote`,
+          typeArguments: [hop.baseCoinType, hop.quoteCoinType],
+          arguments: [
+            tx.object(hop.poolId),
+            currentCoin,
+            deepFeeCoin,
+            tx.pure.u64(toBigIntString(hop.minOutputAmount)),
+            tx.object(SUI_CLOCK_OBJECT_ID),
+          ],
+        }) as [unknown, unknown, unknown];
+
+        returnCoins.push(baseOut, deepOut);
+        currentCoin = quoteOut;
+      } else {
+        const [baseOut, quoteOut, deepOut] = tx.moveCall({
+          target: `${params.packageId}::pool::swap_exact_quote_for_base`,
+          typeArguments: [hop.baseCoinType, hop.quoteCoinType],
+          arguments: [
+            tx.object(hop.poolId),
+            currentCoin,
+            deepFeeCoin,
+            tx.pure.u64(toBigIntString(hop.minOutputAmount)),
+            tx.object(SUI_CLOCK_OBJECT_ID),
+          ],
+        }) as [unknown, unknown, unknown];
+
+        returnCoins.push(quoteOut, deepOut);
+        currentCoin = baseOut;
+      }
+    }
+
+    tx.transferObjects([currentCoin, ...returnCoins], tx.pure.address(sender));
+    return this.executeTransaction(tx, params.signerSecretKey);
+  }
+
+  async recoverOwnedCoins(params: {
+    signerSecretKey: string;
+    recipient: string;
+    keepSuiGas?: bigint | number | string;
+    coinTypes?: string[];
+  }): Promise<{
+    digest: string;
+    signerAddress: string;
+    rawResponse: unknown;
+    recovered: Array<{
+      coinType: string;
+      balance: string;
+      recoveredBalance: string;
+    }>;
+  }> {
+    const [{ Transaction }, signer] = await Promise.all([
+      loadSuiRuntime(),
+      toKeypair(params.signerSecretKey),
+    ]);
+
+    const sender = signer.toSuiAddress();
+    const [balancesResponse, suiBalanceResponse] = await Promise.all([
+      this.listBalances(sender),
+      this.getBalance(sender, SUI_TYPE_ARG),
+    ]);
+
+    const requestedTypes = new Set((params.coinTypes ?? []).map(value => value.toLowerCase()));
+    const balanceEntries = Array.isArray((balancesResponse as any)?.balances)
+      ? (balancesResponse as any).balances
+      : [];
+    const knownBalances = balanceEntries
+      .map((entry: any): { coinType: string; balance: string } => ({
+        coinType: String(entry?.coinType ?? ""),
+        balance: String(entry?.coinBalance ?? entry?.balance ?? entry?.addressBalance ?? "0"),
+      }))
+      .filter((entry: { coinType: string; balance: string }) => entry.coinType && BigInt(entry.balance) > 0n)
+      .filter((entry: { coinType: string; balance: string }) => requestedTypes.size === 0 || requestedTypes.has(entry.coinType.toLowerCase()));
+
+    const tx = new Transaction() as SuiTransactionLike;
+    const recovered: Array<{
+      coinType: string;
+      balance: string;
+      recoveredBalance: string;
+    }> = [];
+
+    for (const entry of knownBalances.filter((item: { coinType: string; balance: string }) => item.coinType !== SUI_TYPE_ARG)) {
+      const coinsResponse = await this.getCoins(sender, entry.coinType);
+      const coinObjects = Array.isArray((coinsResponse as any)?.objects) ? (coinsResponse as any).objects : [];
+      if (coinObjects.length === 0) {
+        continue;
+      }
+
+      const primaryObjectId = String(coinObjects[0]?.objectId ?? "");
+      if (!primaryObjectId) {
+        continue;
+      }
+
+      if (coinObjects.length > 1) {
+        tx.mergeCoins(
+          tx.object(primaryObjectId),
+          coinObjects
+            .slice(1)
+            .map((coin: any) => String(coin?.objectId ?? ""))
+            .filter(Boolean)
+            .map((objectId: string) => tx.object(objectId)),
+        );
+      }
+
+      tx.transferObjects([tx.object(primaryObjectId)], tx.pure.address(params.recipient));
+      recovered.push({
+        coinType: entry.coinType,
+        balance: entry.balance,
+        recoveredBalance: entry.balance,
+      });
+    }
+
+    const requestedSui =
+      requestedTypes.size === 0 ||
+      requestedTypes.has(SUI_TYPE_ARG.toLowerCase());
+    if (requestedSui) {
+      const rawSuiBalance =
+        String(
+          (suiBalanceResponse as any)?.balance?.coinBalance ??
+          (suiBalanceResponse as any)?.balance?.balance ??
+          (suiBalanceResponse as any)?.balance?.addressBalance ??
+          (suiBalanceResponse as any)?.totalBalance ??
+          "0",
+        );
+      const totalSui = BigInt(rawSuiBalance);
+      const keepSuiGas = BigInt(params.keepSuiGas ?? 0);
+      if (totalSui > keepSuiGas) {
+        const recoverableSui = totalSui - keepSuiGas;
+        const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(recoverableSui.toString())]);
+        tx.transferObjects([suiCoin], tx.pure.address(params.recipient));
+        recovered.push({
+          coinType: SUI_TYPE_ARG,
+          balance: totalSui.toString(),
+          recoveredBalance: recoverableSui.toString(),
+        });
+      }
+    }
+
+    if (recovered.length === 0) {
+      throw new Error("No recoverable assets found on the session key address");
+    }
+
+    const result = await this.executeTransaction(tx, params.signerSecretKey);
+    return {
+      ...result,
+      recovered,
+    };
   }
 
   async setPaused(params: SuiSetPausedParams): Promise<SuiTransactionExecutionResult> {

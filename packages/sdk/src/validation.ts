@@ -15,7 +15,11 @@ export function assertSuiAddress(value: string, fieldName: string, options: { al
   }
 }
 
-export function parsePositiveU64(value: bigint | number | string, fieldName: string): bigint {
+export function parseU64(
+  value: bigint | number | string,
+  fieldName: string,
+  options: { allowZero?: boolean } = {},
+): bigint {
   let parsed: bigint;
   try {
     parsed = BigInt(value);
@@ -23,8 +27,8 @@ export function parsePositiveU64(value: bigint | number | string, fieldName: str
     throw new Error(`${fieldName} must be an integer amount`);
   }
 
-  if (parsed <= 0n) {
-    throw new Error(`${fieldName} must be greater than 0`);
+  if (parsed < 0n || (!options.allowZero && parsed === 0n)) {
+    throw new Error(`${fieldName} must be ${options.allowZero ? "0 or greater" : "greater than 0"}`);
   }
 
   if (parsed > MAX_U64) {
@@ -34,9 +38,19 @@ export function parsePositiveU64(value: bigint | number | string, fieldName: str
   return parsed;
 }
 
+export function parsePositiveU64(value: bigint | number | string, fieldName: string): bigint {
+  return parseU64(value, fieldName);
+}
+
 export function assertCoinType(value: string, fieldName = "coinType"): void {
   if (!/^0x[0-9a-fA-F]{1,64}::[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
     throw new Error(`${fieldName} must be a fully-qualified Sui coin type`);
+  }
+}
+
+export function assertMoveIdentifier(value: string, fieldName: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+    throw new Error(`${fieldName} must be a valid Move identifier`);
   }
 }
 

@@ -1,11 +1,42 @@
 import { randomUUID } from "crypto";
 
 type ParsedTransferInstruction = {
+  kind: "payment";
   recipient: string;
   amountInput: string;
   amount: string;
   reason: string;
 };
+
+type ContractCallArgumentInput = {
+  kind: "object" | "address" | "u64" | "string" | "bool";
+  value: string | boolean;
+};
+
+type ParsedContractCallInstruction = {
+  kind: "contract_call";
+  packageId: string;
+  module: string;
+  functionName: string;
+  typeArguments: string[];
+  arguments: ContractCallArgumentInput[];
+  target: string;
+  reason: string;
+};
+
+type ParsedDeepBookSwapInstruction = {
+  kind: "deepbook_swap";
+  inputSymbol: string;
+  outputSymbol: string;
+  amountInput: string;
+  amount: string;
+  reason: string;
+};
+
+export type ParsedAgentInstruction =
+  | ParsedTransferInstruction
+  | ParsedContractCallInstruction
+  | ParsedDeepBookSwapInstruction;
 
 function parseAmountInput(value: string, decimals: number) {
   const trimmed = value.trim();
@@ -70,7 +101,98 @@ function extractAmountInput(normalized: string) {
   return numericMatches[0];
 }
 
-export function parseTransferInstruction(instruction: string, decimals: number): ParsedTransferInstruction {
+function parseJsonArray(raw: string, fieldName: string): unknown[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${fieldName} must be valid JSON`);
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${fieldName} must be a JSON array`);
+  }
+
+  return parsed;
+}
+
+function extractBracketArray(source: string, marker: RegExp, fieldName: string): string[] | ContractCallArgumentInput[] {
+  const match = marker.exec(source);
+  if (!match?.[1]) {
+    return [];
+  }
+
+  const parsed = parseJsonArray(match[1], fieldName);
+  return parsed as string[] | ContractCallArgumentInput[];
+}
+
+function parseContractCallInstruction(instruction: string): ParsedContractCallInstruction | null {
+  const trimmed = instruction.trim();
+  if (!trimmed) {
+    throw new Error("Instruction is empty");
+  }
+
+  const targetMatch =
+    trimmed.match(/(?:^|\b)(?:call|invoke|execute)\s+(0x[a-fA-F0-9]{1,64})::([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)(?:\b|$)/i) ??
+    trimmed.match(/^(0x[a-fA-F0-9]{1,64})::([A-Za-z_][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)(?:\b|$)/);
+
+  if (!targetMatch) {
+    return null;
+  }
+
+  const [, packageId, module, functionName] = targetMatch;
+  const typeArguments = extractBracketArray(
+    trimmed,
+    /type\s*args?\s*(?:=|:)?\s*(\[[\s\S]*?\])(?=\s+(?:with\s+)?args?\b|$)/i,
+    "type arguments",
+  ) as string[];
+  const args = extractBracketArray(
+    trimmed,
+    /(?:^|\s)(?:with\s+)?args?\s*(?:=|:)?\s*(\[[\s\S]*\])$/i,
+    "contract arguments",
+  ) as ContractCallArgumentInput[];
+
+  return {
+    kind: "contract_call",
+    packageId,
+    module,
+    functionName,
+    typeArguments,
+    arguments: args,
+    target: `${packageId}::${module}::${functionName}`,
+    reason: trimmed,
+  };
+}
+
+function parseDeepBookSwapInstruction(instruction: string, decimals: number): ParsedDeepBookSwapInstruction | null {
+  const normalized = normalizeInstruction(instruction);
+  if (!normalized) {
+    throw new Error("Instruction is empty");
+  }
+
+  const match = normalized.match(
+    /(?:swap|convert|exchange)\s+(\d+(?:\.\d+)?)\s+([a-zA-Z0-9]+)\s+(?:to|for|into)\s+([a-zA-Z0-9]+)(?:\s+(?:via|on)\s+deepbook)?/i,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const [, amountInput, inputSymbol, outputSymbol] = match;
+  if (!/deepbook/i.test(normalized) && !/^swap\b/i.test(normalized)) {
+    return null;
+  }
+
+  return {
+    kind: "deepbook_swap",
+    inputSymbol: inputSymbol.toUpperCase(),
+    outputSymbol: outputSymbol.toUpperCase(),
+    amountInput,
+    amount: parseAmountInput(amountInput, decimals),
+    reason: normalized,
+  };
+}
+
+function parseTransferInstruction(instruction: string, decimals: number): ParsedTransferInstruction {
   const normalized = normalizeInstruction(instruction);
   if (!normalized) {
     throw new Error("Instruction is empty");
@@ -80,6 +202,7 @@ export function parseTransferInstruction(instruction: string, decimals: number):
   const amountInput = extractAmountInput(normalized);
 
   return {
+    kind: "payment",
     recipient,
     amountInput,
     amount: parseAmountInput(amountInput, decimals),
@@ -87,11 +210,65 @@ export function parseTransferInstruction(instruction: string, decimals: number):
   };
 }
 
+export function parseAgentInstruction(instruction: string, decimals: number): ParsedAgentInstruction {
+  const contractCall = parseContractCallInstruction(instruction);
+  if (contractCall) {
+    return contractCall;
+  }
+
+  const deepBookSwap = parseDeepBookSwapInstruction(instruction, decimals);
+  if (deepBookSwap) {
+    return deepBookSwap;
+  }
+
+  return parseTransferInstruction(instruction, decimals);
+}
+
 export function buildDemoAgentTrace(args: {
   instruction: string;
-  parsed: ParsedTransferInstruction;
+  parsed: ParsedAgentInstruction;
   agentId: string;
 }) {
+  if (args.parsed.kind === "deepbook_swap") {
+    return [
+      {
+        step: 1,
+        type: "planner",
+        message: `Received instruction: ${args.instruction}`,
+      },
+      {
+        step: 2,
+        type: "skill",
+        message: `Wallet skill parsed DeepBook swap ${args.parsed.amountInput} ${args.parsed.inputSymbol} -> ${args.parsed.outputSymbol}`,
+      },
+      {
+        step: 3,
+        type: "tool",
+        message: `Calling runtime DeepBook swap for agentId=${args.agentId}`,
+      },
+    ];
+  }
+
+  if (args.parsed.kind === "contract_call") {
+    return [
+      {
+        step: 1,
+        type: "planner",
+        message: `Received instruction: ${args.instruction}`,
+      },
+      {
+        step: 2,
+        type: "skill",
+        message: `Wallet skill parsed contract target=${args.parsed.target} typeArgs=${args.parsed.typeArguments.length} args=${args.parsed.arguments.length}`,
+      },
+      {
+        step: 3,
+        type: "tool",
+        message: `Calling runtime contract call for agentId=${args.agentId}`,
+      },
+    ];
+  }
+
   return [
     {
       step: 1,

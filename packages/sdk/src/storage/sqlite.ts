@@ -1,6 +1,15 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { AgentConfig, AgentPolicy, ApprovalRequest, AuditReceipt, BudgetRecord, PaidService, TelegramBinding } from "../types";
+import type {
+  AgentConfig,
+  AgentPolicy,
+  ApprovalRequest,
+  AuditReceipt,
+  BudgetRecord,
+  ContractWhitelistEntry,
+  PaidService,
+  TelegramBinding,
+} from "../types";
 
 type StorageMode = "json";
 
@@ -12,6 +21,7 @@ type JsonState = {
   services: PaidService[];
   approvals: ApprovalRequest[];
   telegramBindings: TelegramBinding[];
+  contractWhitelist: ContractWhitelistEntry[];
 };
 
 function currentDateKey() {
@@ -31,6 +41,7 @@ function createEmptyState(): JsonState {
     services: [],
     approvals: [],
     telegramBindings: [],
+    contractWhitelist: [],
   };
 }
 
@@ -73,6 +84,7 @@ export class Storage {
         services: Array.isArray(parsed.services) ? parsed.services : [],
         approvals: Array.isArray(parsed.approvals) ? parsed.approvals : [],
         telegramBindings: Array.isArray(parsed.telegramBindings) ? parsed.telegramBindings : [],
+        contractWhitelist: Array.isArray(parsed.contractWhitelist) ? parsed.contractWhitelist : [],
       };
     } catch {
       return createEmptyState();
@@ -274,6 +286,66 @@ export class Storage {
       binding => binding.walletAddress.toLowerCase() !== normalizedWalletAddress,
     );
     const changed = this.state.telegramBindings.length !== before;
+    if (changed) {
+      this.flush();
+    }
+    return changed;
+  }
+
+  saveContractWhitelistEntry(entry: ContractWhitelistEntry): void {
+    const normalizedWalletAddress = entry.walletAddress.toLowerCase();
+    const normalizedPackageId = entry.packageId.toLowerCase();
+    this.state.contractWhitelist = [
+      clone({
+        ...entry,
+        walletAddress: normalizedWalletAddress,
+        packageId: normalizedPackageId,
+      }),
+      ...this.state.contractWhitelist.filter(
+        item =>
+          !(
+            item.walletAddress.toLowerCase() === normalizedWalletAddress &&
+            item.packageId.toLowerCase() === normalizedPackageId
+          ),
+      ),
+    ];
+    this.flush();
+  }
+
+  getContractWhitelistEntry(walletAddress: string, packageId: string): ContractWhitelistEntry | null {
+    const normalizedWalletAddress = walletAddress.toLowerCase();
+    const normalizedPackageId = packageId.toLowerCase();
+    const found = this.state.contractWhitelist.find(
+      entry =>
+        entry.walletAddress.toLowerCase() === normalizedWalletAddress &&
+        entry.packageId.toLowerCase() === normalizedPackageId,
+    );
+    return found ? clone(found) : null;
+  }
+
+  listContractWhitelistEntries(walletAddress?: string): ContractWhitelistEntry[] {
+    const normalizedWalletAddress = walletAddress?.toLowerCase();
+    return clone(
+      [...this.state.contractWhitelist]
+        .filter(entry =>
+          normalizedWalletAddress ? entry.walletAddress.toLowerCase() === normalizedWalletAddress : true,
+        )
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    );
+  }
+
+  deleteContractWhitelistEntry(walletAddress: string, packageId: string): boolean {
+    const normalizedWalletAddress = walletAddress.toLowerCase();
+    const normalizedPackageId = packageId.toLowerCase();
+    const before = this.state.contractWhitelist.length;
+    this.state.contractWhitelist = this.state.contractWhitelist.filter(
+      entry =>
+        !(
+          entry.walletAddress.toLowerCase() === normalizedWalletAddress &&
+          entry.packageId.toLowerCase() === normalizedPackageId
+        ),
+    );
+    const changed = this.state.contractWhitelist.length !== before;
     if (changed) {
       this.flush();
     }

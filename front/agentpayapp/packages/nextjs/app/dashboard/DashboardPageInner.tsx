@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { getDeepBookDemoSummary } from "~~/lib/deepbook";
 import {
   SUI_COIN_TYPE,
   ZERO_ADDRESS,
@@ -60,6 +61,7 @@ type BackendAgent = {
 type BackendReceipt = {
   paymentId: string;
   agentId: string;
+  operation?: "payment" | "contract_call" | "deepbook_swap";
   reason: string;
   recipient: string;
   amount: string;
@@ -67,6 +69,9 @@ type BackendReceipt = {
   finalDecision: string;
   txHash?: string;
   timestamp: string;
+  contractCall?: {
+    target: string;
+  };
 };
 
 type BackendService = {
@@ -85,6 +90,7 @@ type BackendService = {
 type BackendApproval = {
   approvalId: string;
   approvalToken: string;
+  operation?: "payment" | "contract_call" | "deepbook_swap";
   agentId: string;
   taskId: string;
   reason: string;
@@ -96,6 +102,9 @@ type BackendApproval = {
   createdAt: string;
   resolvedAt?: string;
   txHash?: string;
+  contractCall?: {
+    target: string;
+  };
 };
 
 type BackendTelegramBinding = {
@@ -104,6 +113,34 @@ type BackendTelegramBinding = {
   chatId: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type BackendContractWhitelistEntry = {
+  entryId: string;
+  walletAddress: string;
+  packageId: string;
+  label?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type BackendSessionLifecycle = {
+  agentId: string;
+  label: string;
+  sessionKey: string;
+  expiresAt: number;
+  expired: boolean;
+  revoked: boolean;
+  assets: Array<{
+    coinType: string;
+    balance: string;
+    recoverableBalance: string;
+  }>;
+};
+
+type ContractCallArgumentInput = {
+  kind: "object" | "address" | "u64" | "string" | "bool";
+  value: string | boolean;
 };
 
 type MockAgentResponse = {
@@ -120,6 +157,14 @@ type MockAgentResponse = {
     details?: string;
   };
 };
+
+type RuntimeActionResponse = {
+  decision?: string;
+  result?: string;
+  approvalRequest?: BackendApproval;
+};
+
+const deepBookDemoSummary = getDeepBookDemoSummary();
 
 function scopedObjectKey(kind: "vault" | "registry", network: string, address: string) {
   return `sui-agent-pay:${network}:${address.toLowerCase()}:${kind}`;
@@ -181,6 +226,31 @@ function getCreatedObjectId(raw: any, typeMarker: string): string | null {
   return null;
 }
 
+function formatInputAmountValue(value: bigint | number | string, decimals: number) {
+  const bigintValue = BigInt(value);
+  const negative = bigintValue < 0n;
+  const absolute = negative ? bigintValue * -1n : bigintValue;
+  const base = 10n ** BigInt(decimals);
+  const whole = absolute / base;
+  const fraction = (absolute % base).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return `${negative ? "-" : ""}${fraction ? `${whole.toString()}.${fraction.slice(0, 6)}` : whole.toString()}`;
+}
+
+function formatExpiryStatus(expiry: number) {
+  const now = Math.floor(Date.now() / 1000);
+  const delta = expiry - now;
+  if (delta <= 0) {
+    return "Expired";
+  }
+
+  const hours = Math.floor(delta / 3600);
+  const minutes = Math.floor((delta % 3600) / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes}m remaining`;
+  }
+  return `${Math.max(minutes, 1)}m remaining`;
+}
+
 function DashboardPageContent() {
   const dAppKit = useDAppKit();
   const client = useCurrentClient();
@@ -221,6 +291,7 @@ function DashboardPageContent() {
   const [backendServices, setBackendServices] = useState<BackendService[]>([]);
   const [backendApprovals, setBackendApprovals] = useState<BackendApproval[]>([]);
   const [backendTelegramBindings, setBackendTelegramBindings] = useState<BackendTelegramBinding[]>([]);
+  const [backendContractWhitelist, setBackendContractWhitelist] = useState<BackendContractWhitelistEntry[]>([]);
   const [backendResult, setBackendResult] = useState("");
   const [trackedApprovalToken, setTrackedApprovalToken] = useState("");
   const [trackedApproval, setTrackedApproval] = useState<BackendApproval | null>(null);
@@ -230,8 +301,22 @@ function DashboardPageContent() {
   const [sdkPaymentReason, setSdkPaymentReason] = useState("agent runtime payment");
   const [sdkPaymentAmount, setSdkPaymentAmount] = useState("0.01");
   const [approvalChatId, setApprovalChatId] = useState("");
+  const [whitelistPackageId, setWhitelistPackageId] = useState(
+    appConfig.network === "sui-testnet" ? deepBookDemoSummary.packageId : appConfig.packageId || "",
+  );
+  const [whitelistLabel, setWhitelistLabel] = useState("");
+  const [contractCallReason, setContractCallReason] = useState("Run agent contract call");
+  const [contractPackageId, setContractPackageId] = useState(appConfig.packageId || "");
+  const [contractModule, setContractModule] = useState("");
+  const [contractFunctionName, setContractFunctionName] = useState("");
+  const [contractTypeArguments, setContractTypeArguments] = useState("[]");
+  const [contractArgumentsJson, setContractArgumentsJson] = useState(
+    `[
+  { "kind": "u64", "value": "1" }
+]`,
+  );
   const [mockAgentInstruction, setMockAgentInstruction] = useState(
-    "Pay 0.01 SUI to 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef for API usage",
+    "Swap 0.01 SUI to USDC via DeepBook",
   );
   const [serviceUrl, setServiceUrl] = useState("https://example.com/agent");
   const [serviceDescription, setServiceDescription] = useState("Demo paid endpoint");
@@ -275,6 +360,10 @@ function DashboardPageContent() {
     account?.address
       ? backendTelegramBindings.find(binding => binding.walletAddress.toLowerCase() === account.address.toLowerCase()) ?? null
       : null;
+  const currentWalletContractWhitelist =
+    account?.address
+      ? backendContractWhitelist.filter(entry => entry.walletAddress.toLowerCase() === account.address.toLowerCase())
+      : [];
 
   useEffect(() => {
     setApprovalChatId(currentWalletBinding?.chatId ?? "");
@@ -373,7 +462,12 @@ function DashboardPageContent() {
   }
 
   const selectedBackendAgent = backendAgents.find(agent => agent.agentId === sdkAgentId) ?? null;
-  const runnableBackendAgents = backendAgents.filter(agent => agent.hasStoredSessionKey && !agent.revokedAt);
+  const runnableBackendAgents = backendAgents.filter(
+    agent =>
+      agent.hasStoredSessionKey &&
+      !agent.revokedAt &&
+      (!agent.session?.expiry || agent.session.expiry > Math.floor(Date.now() / 1000)),
+  );
   const runtimePayRequestExample = JSON.stringify(
     {
       agentId: sdkAgentId || "<agent-id>",
@@ -408,6 +502,32 @@ function DashboardPageContent() {
     null,
     2,
   );
+  const contractCallRequestExample = JSON.stringify(
+    {
+      agentId: sdkAgentId || "<agent-id>",
+      reason: contractCallReason,
+      walletAddress: account?.address || "<wallet-address>",
+      packageId: contractPackageId || "<package-id>",
+      module: contractModule || "<module>",
+      functionName: contractFunctionName || "<function>",
+      typeArguments: (() => {
+        try {
+          return JSON.parse(contractTypeArguments);
+        } catch {
+          return contractTypeArguments;
+        }
+      })(),
+      arguments: (() => {
+        try {
+          return JSON.parse(contractArgumentsJson);
+        } catch {
+          return contractArgumentsJson;
+        }
+      })(),
+    },
+    null,
+    2,
+  );
 
   function rememberObject(kind: "vault", objectId: string) {
     if (!account?.address || typeof window === "undefined") return;
@@ -433,18 +553,58 @@ function DashboardPageContent() {
     return data;
   }
 
+  function parseJsonArray<T>(raw: string, fieldName: string): T[] {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`${fieldName} must be valid JSON`);
+    }
+
+    if (!Array.isArray(parsed)) {
+      throw new Error(`${fieldName} must be a JSON array`);
+    }
+
+    return parsed as T[];
+  }
+
+  async function sendTelegramApprovalRequest(approvalToken: string, text: string) {
+    const resolvedChatId = approvalChatId.trim() || currentWalletBinding?.chatId || "";
+    if (!resolvedChatId) {
+      const missingChat = {
+        sent: false,
+        error: "No Telegram chat ID is available for this approval request.",
+      };
+      setLatestTelegramApproval(missingChat);
+      return missingChat;
+    }
+
+    const telegram = await apiRequest<MockAgentResponse["telegram"]>("/api/tg/approve", {
+      method: "POST",
+      body: JSON.stringify({
+        approvalToken,
+        text,
+        chatId: resolvedChatId,
+        walletAddress: account?.address,
+      }),
+    });
+    setLatestTelegramApproval(telegram ?? null);
+    return telegram;
+  }
+
   async function refreshBackend() {
     setBackendBusyAction("refresh");
     setBackendError("");
 
     try {
-      const [status, agents, receipts, services, approvals, telegramBindings] = await Promise.all([
+      const [status, agents, receipts, services, approvals, telegramBindings, contractWhitelist] = await Promise.all([
         apiRequest<BackendStatus>("/api/backend/status"),
         apiRequest<BackendAgent[]>("/api/agents?includeSession=true"),
         apiRequest<BackendReceipt[]>("/api/audit-log?limit=12"),
         apiRequest<BackendService[]>("/api/services"),
         apiRequest<BackendApproval[]>("/api/approvals?limit=12"),
         apiRequest<BackendTelegramBinding[]>("/api/tg-bindings"),
+        apiRequest<BackendContractWhitelistEntry[]>("/api/contract-whitelist"),
       ]);
 
       setBackendStatus(status);
@@ -453,6 +613,7 @@ function DashboardPageContent() {
       setBackendServices(services);
       setBackendApprovals(approvals);
       setBackendTelegramBindings(telegramBindings);
+      setBackendContractWhitelist(contractWhitelist);
       setSdkAgentId(current => current || agents[0]?.agentId || "");
       setVerifyServiceId(current => current || services[0]?.serviceId || "");
     } catch (error) {
@@ -513,6 +674,66 @@ function DashboardPageContent() {
       await refreshBackend();
     } catch (error) {
       setBackendError(error instanceof Error ? error.message : "Failed to delete Telegram binding");
+    } finally {
+      setBackendBusyAction(null);
+    }
+  }
+
+  async function saveContractWhitelistEntry() {
+    if (!account?.address) {
+      setBackendError("Please connect a wallet before saving a contract whitelist entry.");
+      return;
+    }
+
+    if (!whitelistPackageId.trim()) {
+      setBackendError("Please enter a package ID to whitelist.");
+      return;
+    }
+
+    setBackendBusyAction("save-contract-whitelist");
+    setBackendError("");
+
+    try {
+      const data = await apiRequest<BackendContractWhitelistEntry>("/api/contract-whitelist", {
+        method: "POST",
+        body: JSON.stringify({
+          walletAddress: account.address,
+          packageId: whitelistPackageId.trim(),
+          label: whitelistLabel.trim() || undefined,
+        }),
+      });
+
+      setBackendResult(JSON.stringify(data, null, 2));
+      await refreshBackend();
+    } catch (error) {
+      setBackendError(error instanceof Error ? error.message : "Failed to save contract whitelist entry");
+    } finally {
+      setBackendBusyAction(null);
+    }
+  }
+
+  async function deleteContractWhitelistEntry(packageId: string) {
+    if (!account?.address) {
+      setBackendError("Please connect a wallet before deleting a contract whitelist entry.");
+      return;
+    }
+
+    setBackendBusyAction("delete-contract-whitelist");
+    setBackendError("");
+
+    try {
+      const data = await apiRequest("/api/contract-whitelist", {
+        method: "DELETE",
+        body: JSON.stringify({
+          walletAddress: account.address,
+          packageId,
+        }),
+      });
+
+      setBackendResult(JSON.stringify(data, null, 2));
+      await refreshBackend();
+    } catch (error) {
+      setBackendError(error instanceof Error ? error.message : "Failed to delete contract whitelist entry");
     } finally {
       setBackendBusyAction(null);
     }
@@ -662,6 +883,59 @@ function DashboardPageContent() {
     }
   }
 
+  async function submitContractCall() {
+    if (!sdkAgentId) {
+      setBackendError("Please select a runtime-ready agent before executing a contract call.");
+      return;
+    }
+
+    if (!account?.address) {
+      setBackendError("Please connect a wallet so the runtime can resolve the correct contract whitelist.");
+      return;
+    }
+
+    setBackendBusyAction("contract-call");
+    setBackendError("");
+
+    try {
+      const typeArguments = parseJsonArray<string>(contractTypeArguments, "Type arguments");
+      const contractArguments = parseJsonArray<ContractCallArgumentInput>(contractArgumentsJson, "Contract arguments");
+
+      const data = await apiRequest<RuntimeActionResponse>("/api/agent-runtime/contract-call", {
+        method: "POST",
+        body: JSON.stringify({
+          agentId: sdkAgentId,
+          reason: contractCallReason,
+          walletAddress: account.address,
+          packageId: contractPackageId,
+          module: contractModule,
+          functionName: contractFunctionName,
+          typeArguments,
+          arguments: contractArguments,
+        }),
+      });
+
+      setBackendResult(JSON.stringify(data, null, 2));
+      setTrackedApprovalToken(data.approvalRequest?.approvalToken ?? "");
+      setTrackedApproval(data.approvalRequest ?? null);
+
+      if (data.approvalRequest?.approvalToken) {
+        await sendTelegramApprovalRequest(
+          data.approvalRequest.approvalToken,
+          `Approval required for contract call ${contractPackageId}::${contractModule}::${contractFunctionName}. Reason: ${contractCallReason}`,
+        );
+      } else {
+        setLatestTelegramApproval(null);
+      }
+
+      await refreshBackend();
+    } catch (error) {
+      setBackendError(error instanceof Error ? error.message : "Failed to execute runtime contract call");
+    } finally {
+      setBackendBusyAction(null);
+    }
+  }
+
   async function submitRuntimeX402() {
     setBackendBusyAction("x402-request");
     setBackendError("");
@@ -743,6 +1017,22 @@ function DashboardPageContent() {
     }
   }
 
+  function loadAgentIntoForm(agent: BackendAgent) {
+    setSdkAgentId(agent.agentId);
+    setAgentName(agent.label);
+    setBackendAgentType(agent.agentType);
+    setBackendUserId(agent.userId);
+    setSessionKeyAddress(agent.sessionKey);
+
+    if (agent.session) {
+      setMaxPerTx(formatInputAmountValue(agent.session.maxPerTx, appConfig.coinDecimals));
+      setMaxTotal(formatInputAmountValue(agent.session.maxTotal, appConfig.coinDecimals));
+      setAllowedRecipient(agent.session.allowedRecipient === ZERO_ADDRESS ? "" : agent.session.allowedRecipient);
+      const remainingSeconds = Math.max(agent.session.expiry - Math.floor(Date.now() / 1000), 3600);
+      setExpiryHours(String(Math.max(1, Math.ceil(remainingSeconds / 3600))));
+    }
+  }
+
   function generateSessionKey() {
     const keypair = Ed25519Keypair.generate();
     const address = keypair.toSuiAddress();
@@ -754,6 +1044,135 @@ function DashboardPageContent() {
       title: "Session key generated",
       detail: address,
     });
+  }
+
+  function prepareRotationForAgent(agent: BackendAgent) {
+    loadAgentIntoForm(agent);
+    const keypair = Ed25519Keypair.generate();
+    const address = keypair.toSuiAddress();
+
+    setSessionKeyAddress(address);
+    setSdkSessionKey(keypair.getSecretKey());
+    setBackendResult(
+      JSON.stringify(
+        {
+          action: "prepare_rotation",
+          agentId: agent.agentId,
+          previousSessionKey: agent.sessionKey,
+          replacementSessionKey: address,
+          nextSteps: [
+            "Register the replacement session key on-chain.",
+            "Recover assets from the expired session key if needed.",
+            "Revoke the old session key on-chain.",
+            "Sync the replacement session key into the local runtime.",
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  async function inspectSessionAssets(agent: BackendAgent) {
+    setBackendBusyAction(`inspect-session-${agent.agentId}`);
+    setBackendError("");
+
+    try {
+      const data = await apiRequest<BackendSessionLifecycle>(
+        `/api/agents/session-lifecycle?agentId=${encodeURIComponent(agent.agentId)}`,
+      );
+      setBackendResult(JSON.stringify(data, null, 2));
+    } catch (error) {
+      setBackendError(error instanceof Error ? error.message : "Failed to inspect session assets");
+    } finally {
+      setBackendBusyAction(null);
+    }
+  }
+
+  async function recoverSessionAssets(agent: BackendAgent) {
+    if (!account?.address) {
+      setBackendError("Please connect the destination wallet before recovering session assets.");
+      return;
+    }
+
+    setBackendBusyAction(`recover-session-${agent.agentId}`);
+    setBackendError("");
+
+    try {
+      const data = await apiRequest("/api/agents/session-lifecycle", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "recover",
+          agentId: agent.agentId,
+          recipient: account.address,
+          keepSuiGas: "2000000",
+        }),
+      });
+
+      setBackendResult(JSON.stringify(data, null, 2));
+      await refreshBackend();
+    } catch (error) {
+      setBackendError(error instanceof Error ? error.message : "Failed to recover session assets");
+    } finally {
+      setBackendBusyAction(null);
+    }
+  }
+
+  async function markLocalSessionRevoked(agent: BackendAgent) {
+    setBackendBusyAction(`mark-revoked-${agent.agentId}`);
+    setBackendError("");
+
+    try {
+      const data = await apiRequest("/api/agents/session-lifecycle", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "mark_revoked",
+          agentId: agent.agentId,
+        }),
+      });
+      setBackendResult(JSON.stringify(data, null, 2));
+      await refreshBackend();
+    } catch (error) {
+      setBackendError(error instanceof Error ? error.message : "Failed to mark the session as revoked");
+    } finally {
+      setBackendBusyAction(null);
+    }
+  }
+
+  function revokeSessionKeyOnChain(agent: BackendAgent) {
+    if (!agent.vaultId) {
+      setBackendError("The selected agent does not have a vault ID.");
+      return;
+    }
+
+    void runTransaction(
+      `Revoke Session Key ${shortenAddress(agent.sessionKey)}`,
+      tx => {
+        tx.moveCall({
+          target: `${vaultTargetBase}::revoke_session_key`,
+          typeArguments: [appConfig.coinType],
+          arguments: [
+            tx.object(agent.vaultId),
+            tx.pure.address(agent.sessionKey),
+          ],
+        });
+      },
+      async details => {
+        await markLocalSessionRevoked(agent);
+        setBackendResult(
+          JSON.stringify(
+            {
+              action: "revoke_session_key",
+              agentId: agent.agentId,
+              sessionKey: agent.sessionKey,
+              digest: getTransactionDigest(details),
+            },
+            null,
+            2,
+          ),
+        );
+      },
+    );
   }
 
   async function runTransaction(
@@ -828,6 +1247,18 @@ function DashboardPageContent() {
   const olderBackendAgents = backendAgents.slice(1);
   const latestBackendReceipt = backendReceipts[0] ?? null;
   const olderBackendReceipts = backendReceipts.slice(1);
+  const latestBackendApproval = backendApprovals[0] ?? null;
+  const olderBackendApprovals = backendApprovals.slice(1);
+  const latestBackendService = backendServices[0] ?? null;
+  const olderBackendServices = backendServices.slice(1);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const expiredBackendAgents = backendAgents.filter(
+    agent => !agent.revokedAt && Boolean(agent.session?.expiry) && (agent.session?.expiry ?? 0) <= nowSeconds,
+  );
+  const expiringSoonBackendAgents = backendAgents.filter(agent => {
+    const expiry = agent.session?.expiry ?? 0;
+    return !agent.revokedAt && expiry > nowSeconds && expiry - nowSeconds <= 6 * 60 * 60;
+  });
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 lg:px-8 lg:py-8">
@@ -884,8 +1315,8 @@ function DashboardPageContent() {
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-2">
-        <div className="space-y-6">
+      <section className="space-y-6">
+        <div className="grid content-start gap-6 xl:grid-cols-[0.82fr_1fr_1.12fr]">
           <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -928,7 +1359,7 @@ function DashboardPageContent() {
           <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-lg font-bold">3. Vault Fund Operations</p>
+                <p className="text-lg font-bold">2. Vault Fund Operations</p>
                 <p className="mt-1 text-sm text-base-content/55">
                   Defaults to {appConfig.coinSymbol}. This interface mainly covers SUI fund flows.
                 </p>
@@ -1078,7 +1509,7 @@ function DashboardPageContent() {
           <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-lg font-bold">4. Session Key Authorization</p>
+                <p className="text-lg font-bold">3. Session Key Authorization</p>
                 <p className="mt-1 text-sm text-base-content/55">
                   Owner grants limits, validity period, and optional recipient constraint to the executing wallet.
                 </p>
@@ -1181,6 +1612,7 @@ function DashboardPageContent() {
               <p className="text-xs leading-6 text-base-content/55">
                 Defaults: max per tx `0.1 {appConfig.coinSymbol}`, total budget `1 {appConfig.coinSymbol}`, validity `24` hours.
                 Telegram approval triggers when payment amount is above the approval threshold but still within the per-tx limit.
+                After expiry, the runtime now blocks direct payment, contract call, and DeepBook execution until you rotate the key.
               </p>
               <button
                 className="btn btn-primary"
@@ -1215,68 +1647,267 @@ function DashboardPageContent() {
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[0.9fr_1.05fr_1.05fr]">
-        <div className="space-y-6">
-          <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-lg font-bold">5. Runtime Status</p>
-                <p className="mt-1 text-sm text-base-content/55">
-                  Next.js API route with JSON runtime storage, audit, and x402 support for the agent backend.
-                </p>
-              </div>
-              <button className="btn btn-ghost btn-sm" onClick={() => void refreshBackend()}>
-                {backendBusyAction === "refresh" ? "Loading..." : "Refresh"}
-              </button>
+      <section className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+        <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-lg font-bold">Runtime Snapshot</p>
+              <p className="mt-1 text-sm text-base-content/55">
+                Runtime status, latest local agents, and recent audit activity.
+              </p>
             </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => void refreshBackend()}>
+              {backendBusyAction === "refresh" ? "Loading..." : "Refresh"}
+            </button>
+          </div>
 
-            {backendStatus ? (
-              <div className="mt-5 space-y-3 text-sm">
+          {backendStatus ? (
+            <div className="mt-5 space-y-4 text-sm">
+              {(expiredBackendAgents.length > 0 || expiringSoonBackendAgents.length > 0) && (
+                <div className="space-y-3">
+                  {expiredBackendAgents.length > 0 && (
+                    <div className="rounded-2xl border border-warning/30 bg-warning/10 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="m-0 text-sm font-semibold">Expired session keys detected</p>
+                          <p className="mt-1 text-xs text-base-content/65">
+                            Recover assets first, then revoke the old key on-chain and rotate to a replacement key.
+                          </p>
+                        </div>
+                        <span className="badge badge-warning">{expiredBackendAgents.length}</span>
+                      </div>
+                      <div className="mt-3 space-y-3">
+                        {expiredBackendAgents.map(agent => (
+                          <div key={agent.agentId} className="rounded-2xl border border-warning/20 bg-base-100/80 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <p className="m-0 text-sm font-semibold">{agent.label}</p>
+                                <p className="mt-1 text-xs text-base-content/60">
+                                  {agent.session?.expiry
+                                    ? `${new Date(agent.session.expiry * 1000).toLocaleString("en-US")} / ${formatExpiryStatus(agent.session.expiry)}`
+                                    : "Session expiry unavailable"}
+                                </p>
+                                <p className="mt-2 break-all font-mono text-[11px] text-base-content/55">{agent.sessionKey}</p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  className="btn btn-ghost btn-xs"
+                                  onClick={() => void inspectSessionAssets(agent)}
+                                >
+                                  {backendBusyAction === `inspect-session-${agent.agentId}` ? "Loading..." : "Inspect assets"}
+                                </button>
+                                <button
+                                  className="btn btn-outline btn-xs"
+                                  onClick={() => void recoverSessionAssets(agent)}
+                                >
+                                  {backendBusyAction === `recover-session-${agent.agentId}` ? "Recovering..." : "Recover assets"}
+                                </button>
+                                <button className="btn btn-outline btn-xs" onClick={() => revokeSessionKeyOnChain(agent)}>
+                                  Revoke on-chain
+                                </button>
+                                <button className="btn btn-primary btn-xs" onClick={() => prepareRotationForAgent(agent)}>
+                                  Prepare rotation
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {expiringSoonBackendAgents.length > 0 && (
+                    <div className="rounded-2xl border border-info/30 bg-info/10 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="m-0 text-sm font-semibold">Session keys expiring soon</p>
+                          <p className="mt-1 text-xs text-base-content/65">
+                            Prepare the replacement key before the current session expires to avoid demo downtime.
+                          </p>
+                        </div>
+                        <span className="badge badge-info">{expiringSoonBackendAgents.length}</span>
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {expiringSoonBackendAgents.map(agent => (
+                          <div key={agent.agentId} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-info/20 bg-base-100/80 px-4 py-3">
+                            <div>
+                              <p className="m-0 text-sm font-semibold">{agent.label}</p>
+                              <p className="mt-1 text-xs text-base-content/60">
+                                {agent.session?.expiry
+                                  ? `${new Date(agent.session.expiry * 1000).toLocaleString("en-US")} / ${formatExpiryStatus(agent.session.expiry)}`
+                                  : "Session expiry unavailable"}
+                              </p>
+                            </div>
+                            <button className="btn btn-primary btn-xs" onClick={() => prepareRotationForAgent(agent)}>
+                              Prepare rotation
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid gap-3 md:grid-cols-4">
                 <div className="rounded-2xl bg-base-200 p-4">
                   <p className="text-xs uppercase tracking-[0.22em] text-base-content/40">Storage</p>
                   <p className="mt-2 font-mono">{backendStatus.storageMode}</p>
                 </div>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div className="rounded-2xl bg-base-200 p-4">
-                    <p className="text-xs text-base-content/45">Agents</p>
-                    <p className="mt-2 text-lg font-bold">{backendStatus.counts.agents}</p>
-                  </div>
-                  <div className="rounded-2xl bg-base-200 p-4">
-                    <p className="text-xs text-base-content/45">Receipts</p>
-                    <p className="mt-2 text-lg font-bold">{backendStatus.counts.recentReceipts}</p>
-                  </div>
-                  <div className="rounded-2xl bg-base-200 p-4">
-                    <p className="text-xs text-base-content/45">Services</p>
-                    <p className="mt-2 text-lg font-bold">{backendStatus.counts.paidServices}</p>
-                  </div>
+                <div className="rounded-2xl bg-base-200 p-4">
+                  <p className="text-xs text-base-content/45">Agents</p>
+                  <p className="mt-2 text-lg font-bold">{backendStatus.counts.agents}</p>
                 </div>
                 <div className="rounded-2xl bg-base-200 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-base-content/40">DB Path</p>
-                  <p className="mt-2 break-all font-mono text-xs">{backendStatus.dbPath}</p>
+                  <p className="text-xs text-base-content/45">Receipts</p>
+                  <p className="mt-2 text-lg font-bold">{backendStatus.counts.recentReceipts}</p>
+                </div>
+                <div className="rounded-2xl bg-base-200 p-4">
+                  <p className="text-xs text-base-content/45">Services</p>
+                  <p className="mt-2 text-lg font-bold">{backendStatus.counts.paidServices}</p>
                 </div>
               </div>
-            ) : (
-              <p className="mt-5 text-sm text-base-content/45">Backend not connected.</p>
-            )}
-
-            {!!backendError && (
-              <div className="mt-4 rounded-2xl border border-error/30 bg-error/10 px-4 py-3 text-sm text-base-content/75">
-                {backendError}
+              <div className="rounded-2xl bg-base-200 p-4">
+                <p className="text-xs uppercase tracking-[0.22em] text-base-content/40">DB Path</p>
+                <p className="mt-2 break-all font-mono text-xs">{backendStatus.dbPath}</p>
               </div>
-            )}
-          </div>
+              <div className="grid gap-4 2xl:grid-cols-2">
+                <div className="rounded-2xl border border-base-300 bg-base-200 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="m-0 text-sm font-semibold">Local Agents</p>
+                    {backendAgents.length > 1 && <span className="text-xs text-base-content/45">{backendAgents.length} total</span>}
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {latestBackendAgent ? (
+                      <>
+                        <article className="rounded-2xl border border-base-300 bg-base-100 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="m-0 text-sm font-bold">{latestBackendAgent.label}</p>
+                              <p className="mt-1 text-xs text-base-content/50">
+                                {latestBackendAgent.agentType} / {latestBackendAgent.userId}
+                              </p>
+                            </div>
+                            <button
+                              className="btn btn-ghost btn-xs"
+                              onClick={() => {
+                                loadAgentIntoForm(latestBackendAgent);
+                              }}
+                            >
+                              Use
+                            </button>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {latestBackendAgent.revokedAt ? (
+                              <span className="badge badge-warning badge-outline">Revoked</span>
+                            ) : latestBackendAgent.session?.expiry ? (
+                              <span
+                                className={`badge badge-outline ${
+                                  latestBackendAgent.session.expiry <= nowSeconds
+                                    ? "badge-warning"
+                                    : latestBackendAgent.session.expiry - nowSeconds <= 6 * 60 * 60
+                                      ? "badge-info"
+                                      : "badge-success"
+                                }`}
+                              >
+                                {formatExpiryStatus(latestBackendAgent.session.expiry)}
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="mb-0 mt-3 break-all font-mono text-xs text-base-content/60">{latestBackendAgent.agentId}</p>
+                          <p className="mb-0 mt-2 break-all font-mono text-xs text-base-content/60">{latestBackendAgent.sessionKey}</p>
+                        </article>
+                        {olderBackendAgents.length > 0 && (
+                          <details className="rounded-2xl border border-base-300 bg-base-100">
+                            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-base-content/70">
+                              Show {olderBackendAgents.length} older agent{olderBackendAgents.length > 1 ? "s" : ""}
+                            </summary>
+                            <div className="space-y-3 border-t border-base-300 px-4 py-4">
+                              {olderBackendAgents.map(agent => (
+                                <article key={agent.agentId} className="rounded-2xl border border-base-300 bg-base-200 p-4">
+                                  <p className="m-0 text-sm font-bold">{agent.label}</p>
+                                  <p className="mt-1 text-xs text-base-content/50">{agent.agentType} / {agent.userId}</p>
+                                  {agent.session?.expiry && (
+                                    <p className="mt-2 text-[11px] text-base-content/55">{formatExpiryStatus(agent.session.expiry)}</p>
+                                  )}
+                                  <p className="mb-0 mt-2 break-all font-mono text-xs text-base-content/60">{agent.agentId}</p>
+                                </article>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-sm text-base-content/45">No agents in the runtime yet.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-base-300 bg-base-200 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="m-0 text-sm font-semibold">Recent Audit</p>
+                    {backendReceipts.length > 1 && <span className="text-xs text-base-content/45">{backendReceipts.length} total</span>}
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {latestBackendReceipt ? (
+                      <>
+                        <article className="rounded-2xl border border-base-300 bg-base-100 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="m-0 text-sm font-bold">{latestBackendReceipt.result}</p>
+                            <span className="text-[11px] text-base-content/45">
+                              {new Date(latestBackendReceipt.timestamp).toLocaleString("en-US")}
+                            </span>
+                          </div>
+                          <p className="mb-0 mt-2 text-sm text-base-content/70">{latestBackendReceipt.reason}</p>
+                          <p className="mb-0 mt-2 text-xs text-base-content/55">
+                            {latestBackendReceipt.agentId} / {latestBackendReceipt.operation ?? "payment"} /{" "}
+                            {formatAmount(latestBackendReceipt.amount, appConfig.coinDecimals, appConfig.coinSymbol)}
+                          </p>
+                        </article>
+                        {olderBackendReceipts.length > 0 && (
+                          <details className="rounded-2xl border border-base-300 bg-base-100">
+                            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-base-content/70">
+                              Show {olderBackendReceipts.length} older receipt{olderBackendReceipts.length > 1 ? "s" : ""}
+                            </summary>
+                            <div className="space-y-3 border-t border-base-300 px-4 py-4">
+                              {olderBackendReceipts.map(receipt => (
+                                <article key={receipt.paymentId} className="rounded-2xl border border-base-300 bg-base-200 p-4">
+                                  <p className="m-0 text-sm font-bold">{receipt.result}</p>
+                                  <p className="mb-0 mt-2 text-sm text-base-content/70">{receipt.reason}</p>
+                                </article>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-sm text-base-content/45">No receipts in the runtime yet.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-5 text-sm text-base-content/45">Backend not connected.</p>
+          )}
 
+          {!!backendError && (
+            <div className="mt-4 rounded-2xl border border-error/30 bg-error/10 px-4 py-3 text-sm text-base-content/75">
+              {backendError}
+            </div>
+          )}
+        </div>
+
+        <div className="grid content-start gap-6 lg:grid-cols-2">
           <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-lg font-bold">6. Sync Agent to Runtime</p>
+                <p className="text-lg font-bold">5. Sync Agent to Runtime</p>
                 <p className="mt-1 text-sm text-base-content/55">
                   Write the local agent config and session signer into the runtime backend to get a usable `agentId`.
                 </p>
               </div>
               <span className="badge badge-outline">Runtime</span>
             </div>
-
             <div className="mt-5 space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <select
@@ -1300,9 +1931,6 @@ function DashboardPageContent() {
                 onChange={event => setSdkSessionKey(event.target.value)}
                 placeholder="Session private key stored only in local runtime"
               />
-              <p className="text-xs leading-6 text-base-content/55">
-                The private key is only saved in the runtime backend for this demo. Read endpoints never return it.
-              </p>
               <button className="btn btn-primary" onClick={() => void syncAgentToRuntime()}>
                 {backendBusyAction === "sync-agent" ? "Syncing..." : "Sync to local runtime"}
               </button>
@@ -1312,27 +1940,20 @@ function DashboardPageContent() {
           <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-lg font-bold">7. Telegram Bindings</p>
+                <p className="text-lg font-bold">6. Telegram Bindings</p>
                 <p className="mt-1 text-sm text-base-content/55">
                   Save a default Telegram chat ID for each wallet address used in the approval demo.
                 </p>
               </div>
               <span className="badge badge-outline">{backendTelegramBindings.length} saved</span>
             </div>
-
             <div className="mt-5 space-y-3">
-              <div className="rounded-2xl bg-base-200 p-4 text-xs text-base-content/65">
-                <p className="m-0 uppercase tracking-[0.22em] text-base-content/40">Current Wallet</p>
-                <p className="mt-2 break-all font-mono">{account?.address || "Connect wallet to manage bindings"}</p>
-              </div>
-
               <input
                 className="input input-bordered w-full"
                 value={approvalChatId}
                 onChange={event => setApprovalChatId(event.target.value)}
                 placeholder="Telegram chat ID"
               />
-
               <div className="flex flex-wrap gap-3">
                 <button className="btn btn-primary" onClick={() => void saveTelegramBinding()}>
                   {backendBusyAction === "save-tg-binding" ? "Saving..." : currentWalletBinding ? "Update binding" : "Save binding"}
@@ -1343,204 +1964,174 @@ function DashboardPageContent() {
                   </button>
                 )}
               </div>
+              {currentWalletBinding && (
+                <div className="rounded-2xl bg-base-200 p-4 text-xs text-base-content/65">
+                  <p className="m-0 uppercase tracking-[0.22em] text-base-content/40">Current Binding</p>
+                  <p className="mt-2 break-all font-mono">{currentWalletBinding.walletAddress}</p>
+                  <p className="mt-2 break-all font-mono">{currentWalletBinding.chatId}</p>
+                </div>
+              )}
+            </div>
+          </div>
 
-              <div className="rounded-2xl border border-base-300 bg-base-200 p-4">
-                <p className="m-0 text-xs uppercase tracking-[0.22em] text-base-content/40">Binding Table</p>
-                <div className="mt-3 space-y-3">
-                  {backendTelegramBindings.length > 0 ? (
-                    backendTelegramBindings.map(binding => (
-                      <div key={binding.bindingId} className="rounded-2xl border border-base-300 bg-base-100 p-3 text-xs text-base-content/70">
+          <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20 lg:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-lg font-bold">7. Contract Whitelist</p>
+                <p className="mt-1 text-sm text-base-content/55">
+                  Package IDs saved here can be executed by the agent without Telegram approval for this wallet.
+                </p>
+              </div>
+              <span className="badge badge-outline">{currentWalletContractWhitelist.length} saved</span>
+            </div>
+            <div className="mt-5 space-y-3">
+              <input
+                className="input input-bordered w-full"
+                value={whitelistPackageId}
+                onChange={event => setWhitelistPackageId(event.target.value)}
+                placeholder="Package ID to whitelist"
+              />
+              <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                <input
+                  className="input input-bordered w-full"
+                  value={whitelistLabel}
+                  onChange={event => setWhitelistLabel(event.target.value)}
+                  placeholder="Optional label"
+                />
+                <button className="btn btn-primary" onClick={() => void saveContractWhitelistEntry()}>
+                  {backendBusyAction === "save-contract-whitelist" ? "Saving..." : "Save"}
+                </button>
+              </div>
+              {currentWalletContractWhitelist.length > 0 ? (
+                <details className="rounded-2xl border border-base-300 bg-base-200">
+                  <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-base-content/70">
+                    Show {currentWalletContractWhitelist.length} whitelist entr{currentWalletContractWhitelist.length > 1 ? "ies" : "y"}
+                  </summary>
+                  <div className="space-y-3 border-t border-base-300 px-4 py-4">
+                    {currentWalletContractWhitelist.map(entry => (
+                      <div key={entry.entryId} className="rounded-2xl border border-base-300 bg-base-100 p-3 text-xs text-base-content/70">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <p className="m-0 break-all font-mono">{binding.walletAddress}</p>
-                            <p className="mb-0 mt-2 break-all font-mono">{binding.chatId}</p>
-                            <p className="mb-0 mt-2 text-[11px] text-base-content/45">
-                              Updated {new Date(binding.updatedAt).toLocaleString("en-US")}
-                            </p>
+                            <p className="m-0 break-all font-mono">{entry.packageId}</p>
+                            {entry.label && <p className="mb-0 mt-2 text-sm font-medium text-base-content/75">{entry.label}</p>}
                           </div>
-                          <button className="btn btn-ghost btn-xs" onClick={() => setApprovalChatId(binding.chatId)}>
-                            Use
-                          </button>
+                          <div className="flex gap-2">
+                            <button
+                              className="btn btn-ghost btn-xs"
+                              onClick={() => {
+                                setWhitelistPackageId(entry.packageId);
+                                setWhitelistLabel(entry.label ?? "");
+                                setContractPackageId(entry.packageId);
+                              }}
+                            >
+                              Use
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-xs text-error"
+                              onClick={() => void deleteContractWhitelistEntry(entry.packageId)}
+                            >
+                              {backendBusyAction === "delete-contract-whitelist" ? "Removing..." : "Remove"}
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    ))
-                  ) : (
-                    <p className="m-0 text-sm text-base-content/45">No Telegram bindings saved yet.</p>
-                  )}
-                </div>
+                    ))}
+                  </div>
+                </details>
+              ) : (
+                <p className="m-0 text-sm text-base-content/45">No whitelisted contract packages for the current wallet yet.</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid content-start gap-6 xl:col-span-2 2xl:grid-cols-[1.05fr_0.95fr]">
+          <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20 2xl:col-span-2">
+            <p className="text-lg font-bold">8. Contract Call Console</p>
+            <div className="mt-4 space-y-3">
+              <div className="rounded-2xl border border-base-300 bg-base-200 p-4 text-sm text-base-content/70">
+                <p className="m-0 font-semibold">Move call demo</p>
+                <p className="mb-0 mt-2">
+                  The runtime signs a generic Move call with the selected session key. Whitelisted package IDs execute directly. Any other package creates a Telegram approval request first.
+                </p>
+                <p className="mb-0 mt-2 text-xs leading-6 text-base-content/60">
+                  This path uses the session key wallet for gas. If the Move function also needs coins or owned objects, pass them explicitly in the argument JSON.
+                </p>
               </div>
-            </div>
-          </div>
-        </div>
 
-        <div className="space-y-6">
-          <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-lg font-bold">Local Agents</p>
-              {backendAgents.length > 1 && <span className="text-xs text-base-content/45">{backendAgents.length} total</span>}
-            </div>
-            <div className="mt-4 space-y-3">
-              {latestBackendAgent ? (
-                <>
-                  <article className="rounded-2xl border border-base-300 bg-base-200 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="m-0 text-sm font-bold">{latestBackendAgent.label}</p>
-                        <p className="mt-1 text-xs text-base-content/50">
-                          {latestBackendAgent.agentType} / {latestBackendAgent.userId}
-                        </p>
-                      </div>
-                      <button
-                        className="btn btn-ghost btn-xs"
-                        onClick={() => {
-                          setSdkAgentId(latestBackendAgent.agentId);
-                          setSessionKeyAddress(latestBackendAgent.sessionKey);
-                        }}
-                      >
-                        Use
-                      </button>
-                    </div>
-                    <p className="mb-0 mt-3 break-all font-mono text-xs text-base-content/60">{latestBackendAgent.agentId}</p>
-                    <p className="mb-0 mt-2 break-all font-mono text-xs text-base-content/60">{latestBackendAgent.sessionKey}</p>
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-base-content/55">
-                      <span
-                        className={`badge badge-sm ${latestBackendAgent.hasStoredSessionKey ? "badge-success" : "badge-ghost"}`}
-                      >
-                        {latestBackendAgent.hasStoredSessionKey ? "runtime ready" : "missing signer"}
-                      </span>
-                      {latestBackendAgent.revokedAt && <span className="badge badge-sm badge-error">revoked</span>}
-                    </div>
-                    {latestBackendAgent.session && (
-                      <p className="mb-0 mt-2 text-xs text-base-content/55">
-                        {formatAmount(latestBackendAgent.session.maxPerTx, appConfig.coinDecimals, appConfig.coinSymbol)} /{" "}
-                        {formatAmount(latestBackendAgent.session.maxTotal, appConfig.coinDecimals, appConfig.coinSymbol)}
-                      </p>
-                    )}
-                  </article>
+              <select
+                className="select select-bordered w-full"
+                value={sdkAgentId}
+                onChange={event => setSdkAgentId(event.target.value)}
+              >
+                <option value="">Select an Agent</option>
+                {runnableBackendAgents.map(agent => (
+                  <option key={agent.agentId} value={agent.agentId}>
+                    {agent.label}
+                  </option>
+                ))}
+              </select>
 
-                  {olderBackendAgents.length > 0 && (
-                    <details className="rounded-2xl border border-base-300 bg-base-100">
-                      <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-base-content/70">
-                        Show {olderBackendAgents.length} older agent{olderBackendAgents.length > 1 ? "s" : ""}
-                      </summary>
-                      <div className="space-y-3 border-t border-base-300 px-4 py-4">
-                        {olderBackendAgents.map(agent => (
-                          <article key={agent.agentId} className="rounded-2xl border border-base-300 bg-base-200 p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="m-0 text-sm font-bold">{agent.label}</p>
-                                <p className="mt-1 text-xs text-base-content/50">
-                                  {agent.agentType} / {agent.userId}
-                                </p>
-                              </div>
-                              <button
-                                className="btn btn-ghost btn-xs"
-                                onClick={() => {
-                                  setSdkAgentId(agent.agentId);
-                                  setSessionKeyAddress(agent.sessionKey);
-                                }}
-                              >
-                                Use
-                              </button>
-                            </div>
-                            <p className="mb-0 mt-3 break-all font-mono text-xs text-base-content/60">{agent.agentId}</p>
-                            <p className="mb-0 mt-2 break-all font-mono text-xs text-base-content/60">{agent.sessionKey}</p>
-                            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-base-content/55">
-                              <span className={`badge badge-sm ${agent.hasStoredSessionKey ? "badge-success" : "badge-ghost"}`}>
-                                {agent.hasStoredSessionKey ? "runtime ready" : "missing signer"}
-                              </span>
-                              {agent.revokedAt && <span className="badge badge-sm badge-error">revoked</span>}
-                            </div>
-                            {agent.session && (
-                              <p className="mb-0 mt-2 text-xs text-base-content/55">
-                                {formatAmount(agent.session.maxPerTx, appConfig.coinDecimals, appConfig.coinSymbol)} /{" "}
-                                {formatAmount(agent.session.maxTotal, appConfig.coinDecimals, appConfig.coinSymbol)}
-                              </p>
-                            )}
-                          </article>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                </>
-              ) : (
-                <p className="text-sm text-base-content/45">No agents in the runtime yet.</p>
-              )}
+              <input
+                className="input input-bordered w-full"
+                value={contractCallReason}
+                onChange={event => setContractCallReason(event.target.value)}
+                placeholder="Reason for this contract call"
+              />
+              <input
+                className="input input-bordered w-full"
+                value={contractPackageId}
+                onChange={event => setContractPackageId(event.target.value)}
+                placeholder="Package ID"
+              />
+              <div className="grid gap-3 md:grid-cols-2">
+                <input
+                  className="input input-bordered w-full"
+                  value={contractModule}
+                  onChange={event => setContractModule(event.target.value)}
+                  placeholder="Module"
+                />
+                <input
+                  className="input input-bordered w-full"
+                  value={contractFunctionName}
+                  onChange={event => setContractFunctionName(event.target.value)}
+                  placeholder="Function"
+                />
+              </div>
+              <textarea
+                className="textarea textarea-bordered min-h-[72px] w-full"
+                value={contractTypeArguments}
+                onChange={event => setContractTypeArguments(event.target.value)}
+                placeholder='["0x2::sui::SUI"]'
+              />
+              <textarea
+                className="textarea textarea-bordered min-h-[132px] w-full font-mono text-xs"
+                value={contractArgumentsJson}
+                onChange={event => setContractArgumentsJson(event.target.value)}
+                placeholder='[{"kind":"u64","value":"1"}]'
+              />
+              <p className="text-xs leading-6 text-base-content/55">
+                Supported argument kinds: `object`, `address`, `u64`, `string`, `bool`.
+              </p>
+              <pre className="overflow-auto rounded-2xl bg-base-200 p-4 text-xs leading-6 text-base-content/70">
+                {contractCallRequestExample}
+              </pre>
+              <button className="btn btn-primary" onClick={() => void submitContractCall()}>
+                {backendBusyAction === "contract-call" ? "Submitting..." : "Run contract call"}
+              </button>
             </div>
           </div>
 
-          <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-lg font-bold">Recent Audit</p>
-              {backendReceipts.length > 1 && <span className="text-xs text-base-content/45">{backendReceipts.length} total</span>}
-            </div>
-            <div className="mt-4 space-y-3">
-              {latestBackendReceipt ? (
-                <>
-                  <article className="rounded-2xl border border-base-300 bg-base-200 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="m-0 text-sm font-bold">{latestBackendReceipt.result}</p>
-                      <span className="text-[11px] text-base-content/45">
-                        {new Date(latestBackendReceipt.timestamp).toLocaleString("en-US")}
-                      </span>
-                    </div>
-                    <p className="mb-0 mt-2 text-sm text-base-content/70">{latestBackendReceipt.reason}</p>
-                    <p className="mb-0 mt-2 text-xs text-base-content/55">
-                      {latestBackendReceipt.agentId} /{" "}
-                      {formatAmount(latestBackendReceipt.amount, appConfig.coinDecimals, appConfig.coinSymbol)}
-                    </p>
-                    {latestBackendReceipt.txHash && (
-                      <p className="mb-0 mt-2 break-all font-mono text-xs text-base-content/55">
-                        {latestBackendReceipt.txHash}
-                      </p>
-                    )}
-                  </article>
-
-                  {olderBackendReceipts.length > 0 && (
-                    <details className="rounded-2xl border border-base-300 bg-base-100">
-                      <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-base-content/70">
-                        Show {olderBackendReceipts.length} older receipt{olderBackendReceipts.length > 1 ? "s" : ""}
-                      </summary>
-                      <div className="space-y-3 border-t border-base-300 px-4 py-4">
-                        {olderBackendReceipts.map(receipt => (
-                          <article key={receipt.paymentId} className="rounded-2xl border border-base-300 bg-base-200 p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <p className="m-0 text-sm font-bold">{receipt.result}</p>
-                              <span className="text-[11px] text-base-content/45">
-                                {new Date(receipt.timestamp).toLocaleString("en-US")}
-                              </span>
-                            </div>
-                            <p className="mb-0 mt-2 text-sm text-base-content/70">{receipt.reason}</p>
-                            <p className="mb-0 mt-2 text-xs text-base-content/55">
-                              {receipt.agentId} / {formatAmount(receipt.amount, appConfig.coinDecimals, appConfig.coinSymbol)}
-                            </p>
-                            {receipt.txHash && (
-                              <p className="mb-0 mt-2 break-all font-mono text-xs text-base-content/55">{receipt.txHash}</p>
-                            )}
-                          </article>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                </>
-              ) : (
-                <p className="text-sm text-base-content/45">No receipts in the runtime yet.</p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-6">
-          <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
-            <p className="text-lg font-bold">8. Mock Agent Console</p>
+          <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20 2xl:col-span-2">
+            <p className="text-lg font-bold">9. Mock Agent Console</p>
             <div className="mt-4 space-y-3">
               <div className="rounded-2xl border border-base-300 bg-base-200 p-4 text-sm text-base-content/70">
                 <p className="m-0 font-semibold">Minimal demo</p>
                 <p className="mb-0 mt-2">
-                  Give the mock agent a natural-language transfer instruction. It extracts recipient + amount, then spends through the runtime wallet using `agentId`.
+                  Give the mock agent a natural-language wallet instruction. It can parse a token transfer, a DeepBook swap, or a contract call, then execute it through the runtime wallet using `agentId`.
                 </p>
                 <p className="mb-0 mt-2 text-xs leading-6 text-base-content/60">
-                  Examples: `Pay 0.01 SUI to 0x... for API usage` / `transfer 0.25 to 0x...` / `send 1.5 to 0x...`
+                  {"Examples: `Swap 0.01 SUI to USDC via DeepBook` / `Pay 0.01 SUI to 0x... for API usage` / `Call 0x...::module::function type args [\"0x2::sui::SUI\"] args [{\"kind\":\"u64\",\"value\":\"1\"}]`"}
                 </p>
               </div>
 
@@ -1579,7 +2170,7 @@ function DashboardPageContent() {
                 className="textarea textarea-bordered min-h-[110px] w-full"
                 value={mockAgentInstruction}
                 onChange={event => setMockAgentInstruction(event.target.value)}
-                placeholder="Pay 0.01 SUI to 0x... for API usage"
+                placeholder='Swap 0.01 SUI to USDC via DeepBook or Call 0x...::module::function args [{"kind":"u64","value":"1"}]'
               />
               <pre className="overflow-auto rounded-2xl bg-base-200 p-4 text-xs leading-6 text-base-content/70">
                 {mockAgentRequestExample}
@@ -1665,7 +2256,7 @@ function DashboardPageContent() {
             </div>
           </div>
           <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
-            <p className="text-lg font-bold">x402 / Receipt Verify</p>
+            <p className="text-lg font-bold">10. x402 / Receipt Verify</p>
             <div className="mt-4 space-y-3">
               <div className="rounded-2xl bg-base-200 p-4 text-xs text-base-content/65">
                 <p className="m-0 uppercase tracking-[0.22em] text-base-content/40">Endpoint</p>
@@ -1731,38 +2322,64 @@ function DashboardPageContent() {
           </div>
 
           <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
-            <p className="text-lg font-bold">Backend Response</p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-lg font-bold">Response Inspector</p>
+              <span className="text-xs text-base-content/45">Latest payload</span>
+            </div>
             <div className="mt-4 space-y-3">
-              {backendServices.length > 0 && (
+              {latestBackendService && (
                 <div className="rounded-2xl bg-base-200 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-base-content/40">Stored Services</p>
-                  <div className="mt-3 space-y-2">
-                    {backendServices.map(service => (
-                      <div key={service.serviceId} className="text-xs text-base-content/65">
-                        <p className="m-0 font-semibold">{service.description}</p>
-                        <p className="m-0 break-all font-mono">{service.serviceId}</p>
+                  <p className="text-xs uppercase tracking-[0.22em] text-base-content/40">Latest Service</p>
+                  <p className="mt-3 text-sm font-semibold">{latestBackendService.description}</p>
+                  <p className="mt-2 break-all font-mono text-xs text-base-content/65">{latestBackendService.serviceId}</p>
+                  {olderBackendServices.length > 0 && (
+                    <details className="mt-3">
+                      <summary className="cursor-pointer list-none text-xs font-medium text-base-content/60">
+                        Show {olderBackendServices.length} older service{olderBackendServices.length > 1 ? "s" : ""}
+                      </summary>
+                      <div className="mt-2 space-y-2">
+                        {olderBackendServices.map(service => (
+                          <div key={service.serviceId} className="text-xs text-base-content/65">
+                            <p className="m-0 font-semibold">{service.description}</p>
+                            <p className="m-0 break-all font-mono">{service.serviceId}</p>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </details>
+                  )}
                 </div>
               )}
-              {backendApprovals.length > 0 && (
+              {latestBackendApproval && (
                 <div className="rounded-2xl bg-base-200 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-base-content/40">Approval Requests</p>
-                  <div className="mt-3 space-y-2">
-                    {backendApprovals.map(approval => (
-                      <div key={approval.approvalId} className="text-xs text-base-content/65">
-                        <p className="m-0 font-semibold">
-                          {approval.status} / {approval.channel}
-                        </p>
-                        <p className="m-0">{approval.reason}</p>
-                        <p className="m-0 break-all font-mono">{approval.recipient}</p>
+                  <p className="text-xs uppercase tracking-[0.22em] text-base-content/40">Latest Approval</p>
+                  <p className="mt-3 text-sm font-semibold">
+                    {latestBackendApproval.status} / {latestBackendApproval.channel} / {latestBackendApproval.operation ?? "payment"}
+                  </p>
+                  <p className="mt-2 text-xs text-base-content/65">{latestBackendApproval.reason}</p>
+                  <p className="mt-2 break-all font-mono text-xs text-base-content/65">{latestBackendApproval.recipient}</p>
+                  {latestBackendApproval.contractCall?.target && (
+                    <p className="mt-2 break-all font-mono text-xs text-base-content/65">{latestBackendApproval.contractCall.target}</p>
+                  )}
+                  {olderBackendApprovals.length > 0 && (
+                    <details className="mt-3">
+                      <summary className="cursor-pointer list-none text-xs font-medium text-base-content/60">
+                        Show {olderBackendApprovals.length} older approval{olderBackendApprovals.length > 1 ? "s" : ""}
+                      </summary>
+                      <div className="mt-2 space-y-2">
+                        {olderBackendApprovals.map(approval => (
+                          <div key={approval.approvalId} className="text-xs text-base-content/65">
+                            <p className="m-0 font-semibold">
+                              {approval.status} / {approval.channel} / {approval.operation ?? "payment"}
+                            </p>
+                            <p className="m-0">{approval.reason}</p>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </details>
+                  )}
                 </div>
               )}
-              <pre className="overflow-auto rounded-2xl bg-base-200 p-4 text-xs leading-6 text-base-content/70">
+              <pre className="max-h-[320px] overflow-auto rounded-2xl bg-base-200 p-4 text-xs leading-6 text-base-content/70">
                 {backendResult || "Run an action to see the SDK / x402 response here."}
               </pre>
             </div>

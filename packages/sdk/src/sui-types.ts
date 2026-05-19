@@ -98,6 +98,37 @@ export interface SuiExecutePaymentParams {
   coinType?: string;
 }
 
+export interface SuiMoveCallArg {
+  kind: "object" | "address" | "u64" | "string" | "bool";
+  value: string | boolean;
+}
+
+export interface SuiExecuteMoveCallParams {
+  signerSecretKey: string;
+  packageId: string;
+  module: string;
+  functionName: string;
+  typeArguments?: string[];
+  arguments?: SuiMoveCallArg[];
+}
+
+export interface SuiExecuteDeepBookSwapHop {
+  poolId: string;
+  baseCoinType: string;
+  quoteCoinType: string;
+  direction: "base_to_quote" | "quote_to_base";
+  minOutputAmount: string;
+}
+
+export interface SuiExecuteDeepBookSwapParams {
+  signerSecretKey: string;
+  packageId: string;
+  inputCoinType: string;
+  inputAmount: bigint | number | string;
+  deepCoinType: string;
+  route: SuiExecuteDeepBookSwapHop[];
+}
+
 export interface SuiSetPausedParams {
   signerSecretKey: string;
   vaultId: string;

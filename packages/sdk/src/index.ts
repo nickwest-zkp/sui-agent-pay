@@ -7,6 +7,14 @@ import type {
   AgentType,
   AggregatedDecision,
   AppConfig,
+  ContractCallArgument,
+  ContractCallIntent,
+  ContractCallMetadata,
+  ContractWhitelistEntry,
+  DeepBookRouteDirection,
+  DeepBookRouteHop,
+  DeepBookSwapIntent,
+  DeepBookSwapMetadata,
   PaymentIntent,
   PaymentResult,
   PaidService,
@@ -32,7 +40,7 @@ import { callPaidService } from "./settlement/inter-agent";
 import { build402Response, verifyPaymentOnChain, parsePaymentReceipt } from "./x402/x402-server";
 import { makeHttpRequest, parsePaymentRequired, toPaymentIntent, retryWithReceipt } from "./x402/x402-client";
 import { generateSuiSessionKey, resolveSuiAddress } from "./sui-keys";
-import { assertCoinType, assertSafeHttpUrl, assertSuiAddress, parsePositiveU64 } from "./validation";
+import { assertCoinType, assertMoveIdentifier, assertSafeHttpUrl, assertSuiAddress, parsePositiveU64, parseU64 } from "./validation";
 
 function unwrapTransaction(raw: unknown): any {
   if (!raw || typeof raw !== "object") return null;
@@ -120,8 +128,185 @@ function translateVaultExecutePaymentError(
   return message;
 }
 
+function buildContractCallTarget(metadata: Pick<ContractCallMetadata, "packageId" | "module" | "functionName">): string {
+  return `${metadata.packageId}::${metadata.module}::${metadata.functionName}`;
+}
+
+function translateMoveCallExecutionError(
+  error: unknown,
+  context: {
+    sessionKey: string;
+    target: string;
+  }
+): string {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (message.includes("Unable to perform gas selection due to insufficient SUI balance")) {
+    return `Session key ${context.sessionKey} does not have enough SUI to pay gas for ${context.target}. Fund the session key address with a small amount of SUI, then retry the contract call.`;
+  }
+
+  return message;
+}
+
+function translateDeepBookExecutionError(
+  error: unknown,
+  context: {
+    sessionKey: string;
+    packageId: string;
+    inputAmount: string;
+    inputCoinType: string;
+    outputCoinType: string;
+  }
+): string {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (message.includes("Unable to perform gas selection due to insufficient SUI balance")) {
+    return `Session key ${context.sessionKey} does not have enough SUI to pay gas for the DeepBook swap. Fund the session key address with a small amount of SUI, then retry.`;
+  }
+
+  return `DeepBook swap ${context.inputAmount} ${context.inputCoinType} -> ${context.outputCoinType} via package ${context.packageId} failed: ${message}`;
+}
+
 function createApprovalToken() {
   return createHash("sha256").update(randomUUID()).digest("hex");
+}
+
+function normalizeContractCallArgument(arg: ContractCallArgument, index: number): ContractCallArgument {
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`contractCall.arguments[${index}] must be an object`);
+  }
+
+  switch (arg.kind) {
+    case "object":
+    case "address":
+      assertSuiAddress(String(arg.value), `contractCall.arguments[${index}].value`);
+      return { kind: arg.kind, value: String(arg.value) };
+    case "u64":
+      return { kind: arg.kind, value: parseU64(String(arg.value), `contractCall.arguments[${index}].value`, { allowZero: true }).toString() };
+    case "string":
+      if (typeof arg.value !== "string") {
+        throw new Error(`contractCall.arguments[${index}].value must be a string`);
+      }
+      return { kind: arg.kind, value: arg.value };
+    case "bool":
+      if (typeof arg.value === "boolean") {
+        return { kind: arg.kind, value: arg.value };
+      }
+      if (typeof arg.value === "string" && /^(true|false)$/i.test(arg.value)) {
+        return { kind: arg.kind, value: arg.value.toLowerCase() === "true" };
+      }
+      throw new Error(`contractCall.arguments[${index}].value must be true or false`);
+    default:
+      throw new Error(`Unsupported contractCall argument kind: ${(arg as ContractCallArgument).kind}`);
+  }
+}
+
+function normalizeContractCallMetadata(metadata: ContractCallMetadata): ContractCallMetadata {
+  assertSuiAddress(metadata.packageId, "contractCall.packageId");
+  assertMoveIdentifier(metadata.module, "contractCall.module");
+  assertMoveIdentifier(metadata.functionName, "contractCall.functionName");
+  if (metadata.walletAddress) {
+    assertSuiAddress(metadata.walletAddress, "contractCall.walletAddress");
+  }
+
+  const typeArguments = Array.isArray(metadata.typeArguments)
+    ? metadata.typeArguments.map((value, index) => {
+        if (typeof value !== "string" || !value.trim()) {
+          throw new Error(`contractCall.typeArguments[${index}] must be a non-empty string`);
+        }
+        return value.trim();
+      })
+    : [];
+
+  const argumentsList = Array.isArray(metadata.arguments)
+    ? metadata.arguments.map((arg, index) => normalizeContractCallArgument(arg, index))
+    : [];
+  const normalizedPackageId = metadata.packageId.toLowerCase();
+
+  return {
+    packageId: normalizedPackageId,
+    module: metadata.module,
+    functionName: metadata.functionName,
+    target: buildContractCallTarget({
+      packageId: normalizedPackageId,
+      module: metadata.module,
+      functionName: metadata.functionName,
+    }),
+    typeArguments,
+    arguments: argumentsList,
+    walletAddress: metadata.walletAddress?.toLowerCase(),
+  };
+}
+
+function normalizeDeepBookDirection(
+  direction: DeepBookRouteDirection,
+  fieldName: string
+): DeepBookRouteDirection {
+  if (direction !== "base_to_quote" && direction !== "quote_to_base") {
+    throw new Error(`${fieldName} must be "base_to_quote" or "quote_to_base"`);
+  }
+  return direction;
+}
+
+function normalizeDeepBookRouteHop(hop: DeepBookRouteHop, index: number): DeepBookRouteHop {
+  assertSuiAddress(hop.poolId, `deepbookSwap.route[${index}].poolId`);
+  assertCoinType(hop.baseCoinType, `deepbookSwap.route[${index}].baseCoinType`);
+  assertCoinType(hop.quoteCoinType, `deepbookSwap.route[${index}].quoteCoinType`);
+
+  return {
+    poolId: hop.poolId.toLowerCase(),
+    baseCoinType: hop.baseCoinType,
+    quoteCoinType: hop.quoteCoinType,
+    direction: normalizeDeepBookDirection(hop.direction, `deepbookSwap.route[${index}].direction`),
+    minOutputAmount: parseU64(
+      hop.minOutputAmount,
+      `deepbookSwap.route[${index}].minOutputAmount`,
+      { allowZero: true }
+    ).toString(),
+  };
+}
+
+function normalizeDeepBookSwapMetadata(metadata: DeepBookSwapMetadata): DeepBookSwapMetadata {
+  assertSuiAddress(metadata.packageId, "deepbookSwap.packageId");
+  assertCoinType(metadata.inputCoinType, "deepbookSwap.inputCoinType");
+  assertCoinType(metadata.outputCoinType, "deepbookSwap.outputCoinType");
+  assertCoinType(metadata.deepCoinType, "deepbookSwap.deepCoinType");
+  if (metadata.walletAddress) {
+    assertSuiAddress(metadata.walletAddress, "deepbookSwap.walletAddress");
+  }
+
+  const route = Array.isArray(metadata.route)
+    ? metadata.route.map((hop, index) => normalizeDeepBookRouteHop(hop, index))
+    : [];
+  if (route.length === 0) {
+    throw new Error("deepbookSwap.route must contain at least one hop");
+  }
+
+  const inputAmount = parsePositiveU64(metadata.inputAmount, "deepbookSwap.inputAmount").toString();
+  let expectedCoinType = metadata.inputCoinType;
+
+  route.forEach((hop, index) => {
+    const hopInput = hop.direction === "base_to_quote" ? hop.baseCoinType : hop.quoteCoinType;
+    const hopOutput = hop.direction === "base_to_quote" ? hop.quoteCoinType : hop.baseCoinType;
+    if (hopInput !== expectedCoinType) {
+      throw new Error(`deepbookSwap.route[${index}] input coin type must be ${expectedCoinType}`);
+    }
+    expectedCoinType = hopOutput;
+  });
+
+  if (expectedCoinType !== metadata.outputCoinType) {
+    throw new Error("deepbookSwap.outputCoinType does not match the final route output");
+  }
+
+  return {
+    packageId: metadata.packageId.toLowerCase(),
+    walletAddress: metadata.walletAddress?.toLowerCase(),
+    inputCoinType: metadata.inputCoinType,
+    outputCoinType: metadata.outputCoinType,
+    inputAmount,
+    deepCoinType: metadata.deepCoinType,
+    route,
+  };
 }
 
 function validatePolicyForRegistration(policy: AgentPolicy, sessionKey: string, vaultId: string, coinType: string): void {
@@ -151,6 +336,8 @@ function validatePolicyForRegistration(policy: AgentPolicy, sessionKey: string, 
     throw new Error("validUntil must be in the future");
   }
 }
+
+const DEFAULT_SESSION_RECOVERY_GAS_RESERVE = 2_000_000n;
 
 export class AgentPaySDK {
   private policyEngine: PolicyEngine;
@@ -380,6 +567,51 @@ export class AgentPaySDK {
     return { agent, policy };
   }
 
+  private getAgentSessionContext(agentId: string): { agent: AgentConfig; policy: AgentPolicy } {
+    const agent = this.storage.getAgent(agentId);
+    if (!agent) throw new Error(`Agent not found: ${agentId}`);
+
+    const policy = this.storage.getPolicy(agentId);
+    if (!policy) throw new Error(`Policy not found for agent: ${agentId}`);
+
+    assertSuiAddress(agent.vaultId, "agent.vaultId");
+    assertSuiAddress(agent.sessionKey, "agent.sessionKey");
+    assertCoinType(agent.coinType, "agent.coinType");
+
+    return { agent, policy };
+  }
+
+  private async assertSessionSignerMatches(agent: AgentConfig, sessionKeyPrivate: string): Promise<void> {
+    const signerAddress = await resolveSuiAddress(sessionKeyPrivate);
+    if (signerAddress.toLowerCase() !== agent.sessionKey.toLowerCase()) {
+      throw new Error("sessionKeyPrivate does not match the selected agent session key");
+    }
+  }
+
+  private async assertSessionUsable(
+    agentId: string,
+    sessionKeyPrivate: string,
+  ): Promise<{ agent: AgentConfig; policy: AgentPolicy }> {
+    const { agent, policy } = this.getAgentSessionContext(agentId);
+    if (agent.revokedAt) {
+      throw new Error(`Agent session key is revoked: ${agentId}`);
+    }
+
+    assertSuiAddress(agent.sessionKey, "sessionKey");
+    assertSuiAddress(agent.vaultId, "vaultId");
+    assertCoinType(agent.coinType);
+    parsePositiveU64(policy.maxPerTx, "maxPerTx");
+    parsePositiveU64(policy.maxTotal, "maxTotal");
+    parsePositiveU64(policy.dailyBudget, "dailyBudget");
+    parsePositiveU64(policy.weeklyBudget, "weeklyBudget");
+    parsePositiveU64(policy.approvalThreshold, "approvalThreshold");
+    if (policy.validUntil <= Math.floor(Date.now() / 1000)) {
+      throw new Error(`Agent session key is expired in local runtime: ${agentId}`);
+    }
+    await this.assertSessionSignerMatches(agent, sessionKeyPrivate);
+    return { agent, policy };
+  }
+
   private async executeApprovedPayment(
     intent: PaymentIntent,
     sessionKeyPrivate: string,
@@ -489,6 +721,209 @@ export class AgentPaySDK {
     };
   }
 
+  private async executeApprovedContractCall(
+    intent: ContractCallIntent,
+    sessionKeyPrivate: string,
+    options?: { humanApproved?: boolean }
+  ): Promise<PaymentResult> {
+    const { agent } = await this.assertSessionUsable(intent.agentId, sessionKeyPrivate);
+
+    const metadata = normalizeContractCallMetadata(intent.contractCall);
+
+    const whitelisted =
+      metadata.walletAddress
+        ? Boolean(this.storage.getContractWhitelistEntry(metadata.walletAddress, metadata.packageId))
+        : false;
+
+    const hardResult = {
+      passed: true,
+      violations: [] as string[],
+      triggeredRules: whitelisted
+        ? ["contractWhitelist:pass"]
+        : [metadata.walletAddress ? "contractWhitelist:missing" : "walletAddress:missing", "approval:required"],
+      requiresApproval: !whitelisted,
+    };
+
+    const aggregated: AggregatedDecision = {
+      decision: whitelisted || options?.humanApproved ? "allow" : "require_approval",
+      hardPolicy: hardResult,
+      aiRisk: {
+        score: whitelisted ? 0 : 0.2,
+        level: "low",
+        reasons: whitelisted ? ["contract_whitelist_match"] : ["contract_whitelist_miss"],
+        modelVersion: "contract-call-v1",
+      },
+    };
+
+    let txHash: string | undefined;
+    let gasUsed: string | undefined;
+    let result: "success" | "failed" | "rejected" | "pending";
+    let error: string | undefined;
+
+    if (aggregated.decision === "allow") {
+      try {
+        const chainResult = await this.chain.executeMoveCall({
+          signerSecretKey: sessionKeyPrivate,
+          packageId: metadata.packageId,
+          module: metadata.module,
+          functionName: metadata.functionName,
+          typeArguments: metadata.typeArguments,
+          arguments: metadata.arguments,
+        });
+        txHash = chainResult.digest;
+        gasUsed = parseGasUsed(chainResult.rawResponse);
+        result = "success";
+      } catch (err: unknown) {
+        result = "failed";
+        error = translateMoveCallExecutionError(err, {
+          sessionKey: agent.sessionKey,
+          target: metadata.target ?? buildContractCallTarget(metadata),
+        });
+      }
+    } else if (aggregated.decision === "require_approval") {
+      result = "pending";
+    } else {
+      result = "rejected";
+    }
+
+    const receipt = this.auditLogger.createReceipt(
+      {
+        taskId: intent.taskId,
+        agentId: intent.agentId,
+        reason: intent.reason,
+        recipient: metadata.packageId,
+        token: agent.coinType,
+        amount: "0",
+        category: "contract_call",
+        operation: "contract_call",
+        contractCall: metadata,
+      },
+      aggregated,
+      {
+        userId: agent.userId,
+        agentType: agent.agentType,
+        humanApproved: !!options?.humanApproved,
+        signerType: "sui_session_key",
+        txHash,
+        result,
+        gasUsed,
+      }
+    );
+    this.storage.saveReceipt(receipt);
+
+    return {
+      paymentId: receipt.paymentId,
+      decision: aggregated.decision,
+      result,
+      txHash,
+      receipt,
+      error,
+    };
+  }
+
+  private async executeApprovedDeepBookSwap(
+    intent: DeepBookSwapIntent,
+    sessionKeyPrivate: string,
+    options?: { humanApproved?: boolean }
+  ): Promise<PaymentResult> {
+    const { agent } = await this.assertSessionUsable(intent.agentId, sessionKeyPrivate);
+
+    const metadata = normalizeDeepBookSwapMetadata(intent.deepbookSwap);
+
+    const whitelisted =
+      metadata.walletAddress
+        ? Boolean(this.storage.getContractWhitelistEntry(metadata.walletAddress, metadata.packageId))
+        : false;
+
+    const hardResult = {
+      passed: true,
+      violations: [] as string[],
+      triggeredRules: whitelisted
+        ? ["contractWhitelist:pass", "deepbookSwap:pass"]
+        : [metadata.walletAddress ? "contractWhitelist:missing" : "walletAddress:missing", "approval:required"],
+      requiresApproval: !whitelisted,
+    };
+
+    const aggregated: AggregatedDecision = {
+      decision: whitelisted || options?.humanApproved ? "allow" : "require_approval",
+      hardPolicy: hardResult,
+      aiRisk: {
+        score: whitelisted ? 0 : 0.2,
+        level: "low",
+        reasons: whitelisted ? ["contract_whitelist_match", "deepbook_swap_route"] : ["contract_whitelist_miss"],
+        modelVersion: "deepbook-swap-v1",
+      },
+    };
+
+    let txHash: string | undefined;
+    let gasUsed: string | undefined;
+    let result: "success" | "failed" | "rejected" | "pending";
+    let error: string | undefined;
+
+    if (aggregated.decision === "allow") {
+      try {
+        const chainResult = await this.chain.executeDeepBookSwap({
+          signerSecretKey: sessionKeyPrivate,
+          packageId: metadata.packageId,
+          inputCoinType: metadata.inputCoinType,
+          inputAmount: metadata.inputAmount,
+          deepCoinType: metadata.deepCoinType,
+          route: metadata.route,
+        });
+        txHash = chainResult.digest;
+        gasUsed = parseGasUsed(chainResult.rawResponse);
+        result = "success";
+      } catch (err: unknown) {
+        result = "failed";
+        error = translateDeepBookExecutionError(err, {
+          sessionKey: agent.sessionKey,
+          packageId: metadata.packageId,
+          inputAmount: metadata.inputAmount,
+          inputCoinType: metadata.inputCoinType,
+          outputCoinType: metadata.outputCoinType,
+        });
+      }
+    } else if (aggregated.decision === "require_approval") {
+      result = "pending";
+    } else {
+      result = "rejected";
+    }
+
+    const receipt = this.auditLogger.createReceipt(
+      {
+        taskId: intent.taskId,
+        agentId: intent.agentId,
+        reason: intent.reason,
+        recipient: metadata.packageId,
+        token: metadata.inputCoinType,
+        amount: metadata.inputAmount,
+        category: "deepbook_swap",
+        operation: "deepbook_swap",
+        deepbookSwap: metadata,
+      },
+      aggregated,
+      {
+        userId: agent.userId,
+        agentType: agent.agentType,
+        humanApproved: !!options?.humanApproved,
+        signerType: "sui_session_key",
+        txHash,
+        result,
+        gasUsed,
+      }
+    );
+    this.storage.saveReceipt(receipt);
+
+    return {
+      paymentId: receipt.paymentId,
+      decision: aggregated.decision,
+      result,
+      txHash,
+      receipt,
+      error,
+    };
+  }
+
   async requestPayment(
     intent: PaymentIntent,
     sessionKeyPrivate: string
@@ -499,6 +934,7 @@ export class AgentPaySDK {
       const approvalRequest: ApprovalRequest = {
         approvalId: randomUUID(),
         approvalToken: createApprovalToken(),
+        operation: "payment",
         agentId: intent.agentId,
         taskId: intent.taskId,
         reason: intent.reason,
@@ -507,6 +943,80 @@ export class AgentPaySDK {
         amount: intent.amount,
         status: "pending",
         channel: "telegram",
+        sourcePaymentId: execution.paymentId,
+        createdAt: new Date().toISOString(),
+      };
+      this.storage.saveApprovalRequest(approvalRequest);
+      return {
+        ...execution,
+        approvalRequest,
+      };
+    }
+
+    return execution;
+  }
+
+  async requestContractCall(
+    intent: ContractCallIntent,
+    sessionKeyPrivate: string
+  ): Promise<PaymentResult> {
+    const normalizedIntent: ContractCallIntent = {
+      ...intent,
+      contractCall: normalizeContractCallMetadata(intent.contractCall),
+    };
+    const execution = await this.executeApprovedContractCall(normalizedIntent, sessionKeyPrivate);
+
+    if (execution.decision === "require_approval") {
+      const approvalRequest: ApprovalRequest = {
+        approvalId: randomUUID(),
+        approvalToken: createApprovalToken(),
+        operation: "contract_call",
+        agentId: normalizedIntent.agentId,
+        taskId: normalizedIntent.taskId,
+        reason: normalizedIntent.reason,
+        recipient: normalizedIntent.contractCall.packageId,
+        token: this.config.coinType ?? DEFAULT_COIN_TYPE,
+        amount: "0",
+        status: "pending",
+        channel: "telegram",
+        contractCall: normalizedIntent.contractCall,
+        sourcePaymentId: execution.paymentId,
+        createdAt: new Date().toISOString(),
+      };
+      this.storage.saveApprovalRequest(approvalRequest);
+      return {
+        ...execution,
+        approvalRequest,
+      };
+    }
+
+    return execution;
+  }
+
+  async requestDeepBookSwap(
+    intent: DeepBookSwapIntent,
+    sessionKeyPrivate: string
+  ): Promise<PaymentResult> {
+    const normalizedIntent: DeepBookSwapIntent = {
+      ...intent,
+      deepbookSwap: normalizeDeepBookSwapMetadata(intent.deepbookSwap),
+    };
+    const execution = await this.executeApprovedDeepBookSwap(normalizedIntent, sessionKeyPrivate);
+
+    if (execution.decision === "require_approval") {
+      const approvalRequest: ApprovalRequest = {
+        approvalId: randomUUID(),
+        approvalToken: createApprovalToken(),
+        operation: "deepbook_swap",
+        agentId: normalizedIntent.agentId,
+        taskId: normalizedIntent.taskId,
+        reason: normalizedIntent.reason,
+        recipient: normalizedIntent.deepbookSwap.packageId,
+        token: normalizedIntent.deepbookSwap.inputCoinType,
+        amount: normalizedIntent.deepbookSwap.inputAmount,
+        status: "pending",
+        channel: "telegram",
+        deepbookSwap: normalizedIntent.deepbookSwap,
         sourcePaymentId: execution.paymentId,
         createdAt: new Date().toISOString(),
       };
@@ -549,18 +1059,49 @@ export class AgentPaySDK {
       throw new Error(`Agent session private key is not stored locally: ${approval.agentId}`);
     }
 
-    const execution = await this.executeApprovedPayment(
-      {
-        taskId: approval.taskId,
-        agentId: approval.agentId,
-        reason: approval.reason,
-        recipient: approval.recipient,
-        token: approval.token,
-        amount: approval.amount,
-      },
-      agent.sessionKeyPrivate,
-      { humanApproved: true }
-    );
+    let execution: PaymentResult;
+    if (approval.operation === "contract_call") {
+      if (!approval.contractCall) {
+        throw new Error("Approval request is missing contract call details");
+      }
+      execution = await this.executeApprovedContractCall(
+        {
+          taskId: approval.taskId,
+          agentId: approval.agentId,
+          reason: approval.reason,
+          contractCall: approval.contractCall,
+        },
+        agent.sessionKeyPrivate,
+        { humanApproved: true },
+      );
+    } else if (approval.operation === "deepbook_swap") {
+      if (!approval.deepbookSwap) {
+        throw new Error("Approval request is missing DeepBook swap details");
+      }
+      execution = await this.executeApprovedDeepBookSwap(
+        {
+          taskId: approval.taskId,
+          agentId: approval.agentId,
+          reason: approval.reason,
+          deepbookSwap: approval.deepbookSwap,
+        },
+        agent.sessionKeyPrivate,
+        { humanApproved: true },
+      );
+    } else {
+      execution = await this.executeApprovedPayment(
+        {
+          taskId: approval.taskId,
+          agentId: approval.agentId,
+          reason: approval.reason,
+          recipient: approval.recipient,
+          token: approval.token,
+          amount: approval.amount,
+        },
+        agent.sessionKeyPrivate,
+        { humanApproved: true }
+      );
+    }
 
     const nextStatus = execution.result === "success" ? "executed" : "failed";
 
@@ -607,6 +1148,30 @@ export class AgentPaySDK {
     return this.requestPayment(intent, agent.sessionKeyPrivate);
   }
 
+  async requestContractCallForAgent(
+    intent: ContractCallIntent
+  ): Promise<PaymentResult> {
+    const agent = this.storage.getAgent(intent.agentId);
+    if (!agent) throw new Error(`Agent not found: ${intent.agentId}`);
+    if (!agent.sessionKeyPrivate) {
+      throw new Error(`Agent session private key is not stored locally: ${intent.agentId}`);
+    }
+
+    return this.requestContractCall(intent, agent.sessionKeyPrivate);
+  }
+
+  async requestDeepBookSwapForAgent(
+    intent: DeepBookSwapIntent
+  ): Promise<PaymentResult> {
+    const agent = this.storage.getAgent(intent.agentId);
+    if (!agent) throw new Error(`Agent not found: ${intent.agentId}`);
+    if (!agent.sessionKeyPrivate) {
+      throw new Error(`Agent session private key is not stored locally: ${intent.agentId}`);
+    }
+
+    return this.requestDeepBookSwap(intent, agent.sessionKeyPrivate);
+  }
+
   async revokeKey(agentId: string, ownerSecretKey: string): Promise<void> {
     const agent = this.storage.getAgent(agentId);
     if (!agent) throw new Error(`Agent not found: ${agentId}`);
@@ -618,6 +1183,122 @@ export class AgentPaySDK {
       coinType: agent.coinType,
     });
     this.storage.markAgentRevoked(agentId, new Date().toISOString());
+  }
+
+  markLocalAgentRevoked(agentId: string, revokedAt?: string): AgentConfig {
+    const agent = this.storage.getAgent(agentId);
+    if (!agent) throw new Error(`Agent not found: ${agentId}`);
+
+    const nextRevokedAt = revokedAt ?? new Date().toISOString();
+    this.storage.markAgentRevoked(agentId, nextRevokedAt);
+
+    const updated = this.storage.getAgent(agentId);
+    if (!updated) {
+      throw new Error(`Agent not found after revocation update: ${agentId}`);
+    }
+    return updated;
+  }
+
+  async listSessionAssets(
+    agentId: string,
+    options?: { keepSuiGas?: bigint | number | string }
+  ): Promise<{
+    agentId: string;
+    label: string;
+    sessionKey: string;
+    expiresAt: number;
+    expired: boolean;
+    revoked: boolean;
+    assets: Array<{
+      coinType: string;
+      balance: string;
+      recoverableBalance: string;
+    }>;
+  }> {
+    const { agent, policy } = this.getAgentSessionContext(agentId);
+    const keepSuiGas = BigInt(options?.keepSuiGas ?? DEFAULT_SESSION_RECOVERY_GAS_RESERVE);
+    const balancesResponse = await this.chain.listBalances(agent.sessionKey);
+    const balanceEntries = Array.isArray((balancesResponse as any)?.balances)
+      ? (balancesResponse as any).balances
+      : [];
+
+    const assets = balanceEntries
+      .map((entry: any): { coinType: string; balance: string; recoverableBalance: string } => {
+        const coinType = String(entry?.coinType ?? "");
+        const balance = String(entry?.coinBalance ?? entry?.balance ?? entry?.addressBalance ?? "0");
+        const rawBalance = BigInt(balance || "0");
+        const recoverableBalance =
+          coinType.toLowerCase() === DEFAULT_COIN_TYPE.toLowerCase()
+            ? rawBalance > keepSuiGas
+              ? (rawBalance - keepSuiGas).toString()
+              : "0"
+            : rawBalance.toString();
+        return {
+          coinType,
+          balance,
+          recoverableBalance,
+        };
+      })
+      .filter((asset: { coinType: string; balance: string; recoverableBalance: string }) => asset.coinType && BigInt(asset.balance) > 0n)
+      .sort((left: { coinType: string }, right: { coinType: string }) => {
+        if (left.coinType === agent.coinType) return -1;
+        if (right.coinType === agent.coinType) return 1;
+        return left.coinType.localeCompare(right.coinType);
+      });
+
+    return {
+      agentId: agent.agentId,
+      label: agent.label,
+      sessionKey: agent.sessionKey,
+      expiresAt: policy.validUntil,
+      expired: policy.validUntil <= Math.floor(Date.now() / 1000),
+      revoked: Boolean(agent.revokedAt),
+      assets,
+    };
+  }
+
+  async recoverSessionAssets(
+    agentId: string,
+    recipient: string,
+    options?: {
+      keepSuiGas?: bigint | number | string;
+      coinTypes?: string[];
+    }
+  ): Promise<{
+    agentId: string;
+    label: string;
+    sessionKey: string;
+    recipient: string;
+    txHash: string;
+    recovered: Array<{
+      coinType: string;
+      balance: string;
+      recoveredBalance: string;
+    }>;
+  }> {
+    assertSuiAddress(recipient, "recipient");
+    const { agent } = this.getAgentSessionContext(agentId);
+    if (!agent.sessionKeyPrivate) {
+      throw new Error(`Agent session private key is not stored locally: ${agentId}`);
+    }
+
+    await this.assertSessionSignerMatches(agent, agent.sessionKeyPrivate);
+
+    const execution = await this.chain.recoverOwnedCoins({
+      signerSecretKey: agent.sessionKeyPrivate,
+      recipient,
+      keepSuiGas: options?.keepSuiGas ?? DEFAULT_SESSION_RECOVERY_GAS_RESERVE,
+      coinTypes: options?.coinTypes,
+    });
+
+    return {
+      agentId: agent.agentId,
+      label: agent.label,
+      sessionKey: agent.sessionKey,
+      recipient,
+      txHash: execution.digest,
+      recovered: execution.recovered,
+    };
   }
 
   getSessionInfo(agentId: string): SessionKeyInfo {
@@ -842,6 +1523,38 @@ export class AgentPaySDK {
   removeTelegramBinding(walletAddress: string): boolean {
     assertSuiAddress(walletAddress, "walletAddress");
     return this.storage.deleteTelegramBinding(walletAddress);
+  }
+
+  upsertContractWhitelist(walletAddress: string, packageId: string, label?: string): ContractWhitelistEntry {
+    assertSuiAddress(walletAddress, "walletAddress");
+    assertSuiAddress(packageId, "packageId");
+
+    const existing = this.storage.getContractWhitelistEntry(walletAddress, packageId);
+    const now = new Date().toISOString();
+    const entry: ContractWhitelistEntry = {
+      entryId: existing?.entryId ?? randomUUID(),
+      walletAddress: walletAddress.toLowerCase(),
+      packageId: packageId.toLowerCase(),
+      label: label?.trim() || undefined,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    this.storage.saveContractWhitelistEntry(entry);
+    return entry;
+  }
+
+  listContractWhitelist(walletAddress?: string): ContractWhitelistEntry[] {
+    if (walletAddress) {
+      assertSuiAddress(walletAddress, "walletAddress");
+    }
+    return this.storage.listContractWhitelistEntries(walletAddress);
+  }
+
+  removeContractWhitelist(walletAddress: string, packageId: string): boolean {
+    assertSuiAddress(walletAddress, "walletAddress");
+    assertSuiAddress(packageId, "packageId");
+    return this.storage.deleteContractWhitelistEntry(walletAddress, packageId);
   }
 
   buildPaymentRequired(serviceId: string): { status: 402; headers: Record<string, string>; body: string } | null {

@@ -30,6 +30,7 @@ export class AuditLogger {
     return {
       paymentId: randomUUID(),
       taskId: intent.taskId,
+      operation: intent.operation ?? "payment",
       agentId: intent.agentId,
       agentType: extra.agentType as "long_lived" | "temporary",
       userId: extra.userId,
@@ -38,6 +39,8 @@ export class AuditLogger {
       token: intent.token,
       amount: intent.amount,
       category: intent.category,
+      contractCall: intent.contractCall,
+      deepbookSwap: intent.deepbookSwap,
       hardPolicy: decision.hardPolicy,
       aiRisk: decision.aiRisk,
       finalDecision: decision.decision,

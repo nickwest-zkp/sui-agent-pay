@@ -32,6 +32,68 @@ export interface AgentPolicy {
   validUntil: number;
 }
 
+export type ApprovalOperation = "payment" | "contract_call" | "deepbook_swap";
+
+export type ContractCallArgumentKind = "object" | "address" | "u64" | "string" | "bool";
+
+export interface ContractCallArgument {
+  kind: ContractCallArgumentKind;
+  value: string | boolean;
+}
+
+export interface ContractCallMetadata {
+  packageId: string;
+  module: string;
+  functionName: string;
+  target?: string;
+  typeArguments: string[];
+  arguments: ContractCallArgument[];
+  walletAddress?: string;
+}
+
+export interface ContractCallIntent {
+  taskId: string;
+  agentId: string;
+  reason: string;
+  contractCall: ContractCallMetadata;
+}
+
+export interface ContractWhitelistEntry {
+  entryId: string;
+  walletAddress: string;
+  packageId: string;
+  label?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type DeepBookRouteDirection = "base_to_quote" | "quote_to_base";
+
+export interface DeepBookRouteHop {
+  poolId: string;
+  baseCoinType: string;
+  quoteCoinType: string;
+  direction: DeepBookRouteDirection;
+  minOutputAmount: string;
+}
+
+export interface DeepBookSwapMetadata {
+  packageId: string;
+  walletAddress?: string;
+  inputCoinType: string;
+  outputCoinType: string;
+  inputAmount: string;
+  deepCoinType: string;
+  route: DeepBookRouteHop[];
+}
+
+export interface DeepBookSwapIntent {
+  taskId: string;
+  agentId: string;
+  reason: string;
+  deepbookSwap: DeepBookSwapMetadata;
+}
+
 export interface RetryPolicy {
   maxRetries: number;
   sameRecipientOnly: boolean;
@@ -45,6 +107,9 @@ export interface PaymentIntent {
   token: string;
   amount: string;
   category?: string;
+  operation?: ApprovalOperation;
+  contractCall?: ContractCallMetadata;
+  deepbookSwap?: DeepBookSwapMetadata;
 }
 
 export type Decision = "allow" | "require_approval" | "deny" | "error";
@@ -64,6 +129,7 @@ export type ApprovalRequestStatus = "pending" | "approved" | "rejected" | "execu
 export interface ApprovalRequest {
   approvalId: string;
   approvalToken: string;
+  operation: ApprovalOperation;
   agentId: string;
   taskId: string;
   reason: string;
@@ -72,6 +138,8 @@ export interface ApprovalRequest {
   amount: string;
   status: ApprovalRequestStatus;
   channel: "telegram" | "manual";
+  contractCall?: ContractCallMetadata;
+  deepbookSwap?: DeepBookSwapMetadata;
   sourcePaymentId?: string;
   requestedBy?: string;
   approvalNote?: string;
@@ -136,6 +204,7 @@ export interface AggregatedDecision {
 export interface AuditReceipt {
   paymentId: string;
   taskId: string;
+  operation?: ApprovalOperation;
   agentId: string;
   agentType: AgentType;
   userId: string;
@@ -144,6 +213,8 @@ export interface AuditReceipt {
   token: string;
   amount: string;
   category?: string;
+  contractCall?: ContractCallMetadata;
+  deepbookSwap?: DeepBookSwapMetadata;
   hardPolicy: HardPolicyResult;
   aiRisk: AiRiskResult;
   finalDecision: Decision;

@@ -51,10 +51,17 @@ export async function POST(request: Request) {
 
     return ok(data);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const isUserError =
+      message.includes("Agent not found") ||
+      message.includes("session private key is not stored locally") ||
+      message.includes("session key is revoked") ||
+      message.includes("session key is expired") ||
+      message.includes("does not match the selected agent session key");
     return fail(
       "Failed to execute runtime x402 request",
-      500,
-      error instanceof Error ? error.message : String(error),
+      isUserError ? 400 : 500,
+      message,
     );
   }
 }
