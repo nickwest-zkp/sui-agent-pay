@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "installCommand": "pnpm --dir front/agentpayapp install --no-frozen-lockfile",
-  "buildCommand": "pnpm --dir front/agentpayapp build"
+  "installCommand": "if [ -f front/agentpayapp/package.json ]; then pnpm --dir front/agentpayapp install --no-frozen-lockfile; else pnpm install --no-frozen-lockfile; fi",
+  "buildCommand": "if [ -f front/agentpayapp/package.json ]; then pnpm --dir front/agentpayapp build; else pnpm build; fi"
 }
