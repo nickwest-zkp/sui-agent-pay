@@ -16,6 +16,11 @@
     "vercel:login": "pnpm --dir packages/nextjs vercel:login",
     "vercel:yolo": "pnpm --dir packages/nextjs vercel:yolo"
   },
+  "dependencies": {
+    "next": "~15.2.9",
+    "react": "~19.2.6",
+    "react-dom": "~19.2.6"
+  },
   "devDependencies": {
     "husky": "~9.1.6",
     "lint-staged": "~13.2.2"
