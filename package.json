@@ -14,6 +14,7 @@
     "build:mcp": "cd packages/mcp-server && pnpm build"
   },
   "devDependencies": {
+    "next": "~15.2.9",
     "typescript": "^5.7.0"
   },
   "license": "MIT"
