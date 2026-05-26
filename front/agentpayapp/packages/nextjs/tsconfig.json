@@ -27,6 +27,24 @@
       ],
       "@sui-agent-pay/sdk/*": [
         "../../../../packages/sdk/src/*"
+      ],
+      "@mysten/sui/cryptography": [
+        "./node_modules/@mysten/sui/dist/cryptography/index.d.mts"
+      ],
+      "@mysten/sui/grpc": [
+        "./node_modules/@mysten/sui/dist/grpc/index.d.mts"
+      ],
+      "@mysten/sui/keypairs/ed25519": [
+        "./node_modules/@mysten/sui/dist/keypairs/ed25519/index.d.mts"
+      ],
+      "@mysten/sui/keypairs/secp256k1": [
+        "./node_modules/@mysten/sui/dist/keypairs/secp256k1/index.d.mts"
+      ],
+      "@mysten/sui/keypairs/secp256r1": [
+        "./node_modules/@mysten/sui/dist/keypairs/secp256r1/index.d.mts"
+      ],
+      "@mysten/sui/transactions": [
+        "./node_modules/@mysten/sui/dist/transactions/index.d.mts"
       ]
     },
     "plugins": [
