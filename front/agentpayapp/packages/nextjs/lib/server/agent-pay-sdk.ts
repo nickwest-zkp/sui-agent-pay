@@ -1,11 +1,12 @@
-import { AgentPaySDK, DEFAULT_COIN_TYPE, SUI_NETWORKS } from "@sui-agent-pay/sdk";
 import type { AppConfig } from "@sui-agent-pay/sdk";
 import os from "os";
 import path from "path";
 
+type AgentPaySdkInstance = import("@sui-agent-pay/sdk").AgentPaySDK;
+
 declare global {
   // eslint-disable-next-line no-var
-  var __agentPaySdkSingleton: AgentPaySDK | undefined;
+  var __agentPaySdkSingleton: AgentPaySdkInstance | undefined;
 }
 
 function readEnv(name: string, fallback?: string) {
@@ -23,13 +24,21 @@ const TESTNET_DEPLOYMENT = {
   registryId: "0x92524860587b34590d4f57d403be9d9182f5c894e5653b846270722fc34c5f86",
 } as const;
 
+const DEFAULT_COIN_TYPE = "0x2::sui::SUI";
+const NETWORK_DEFAULTS = {
+  "sui-localnet": { grpcUrl: "http://127.0.0.1:9125" },
+  "sui-devnet": { grpcUrl: "https://fullnode.devnet.sui.io:443" },
+  "sui-testnet": { grpcUrl: "https://fullnode.testnet.sui.io:443" },
+  "sui-mainnet": { grpcUrl: "https://fullnode.mainnet.sui.io:443" },
+} as const;
+
 export function loadServerConfig(): AppConfig {
   const isVercel = process.env.VERCEL === "1" || process.env.VERCEL === "true";
   const configuredNetwork = readEnv("SUI_NETWORK", process.env.NEXT_PUBLIC_SUI_NETWORK || "sui-testnet") ?? "sui-testnet";
-  const network = (SUI_NETWORKS[configuredNetwork as AppConfig["network"]]
+  const network = (NETWORK_DEFAULTS[configuredNetwork as AppConfig["network"]]
     ? configuredNetwork
     : "sui-testnet") as AppConfig["network"];
-  const networkDefaults = SUI_NETWORKS[network] ?? SUI_NETWORKS["sui-testnet"];
+  const networkDefaults = NETWORK_DEFAULTS[network] ?? NETWORK_DEFAULTS["sui-testnet"];
   const deploymentDefaults =
     network === "sui-testnet" ? TESTNET_DEPLOYMENT : { packageId: "0x0", vaultId: undefined, registryId: undefined };
   const defaultDbPath = isVercel ? ":memory:" : path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db");
@@ -57,8 +66,9 @@ export function loadServerConfig(): AppConfig {
   };
 }
 
-export async function withSdk<T>(handler: (sdk: AgentPaySDK) => Promise<T> | T): Promise<T> {
+export async function withSdk<T>(handler: (sdk: AgentPaySdkInstance) => Promise<T> | T): Promise<T> {
   if (!globalThis.__agentPaySdkSingleton) {
+    const { AgentPaySDK } = await import("@sui-agent-pay/sdk");
     globalThis.__agentPaySdkSingleton = new AgentPaySDK(loadServerConfig());
   }
 
