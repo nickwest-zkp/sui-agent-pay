@@ -25,11 +25,14 @@ const TESTNET_DEPLOYMENT = {
 
 export function loadServerConfig(): AppConfig {
   const isVercel = process.env.VERCEL === "1" || process.env.VERCEL === "true";
-  const network = (readEnv("SUI_NETWORK", process.env.NEXT_PUBLIC_SUI_NETWORK || "sui-testnet") ??
-    "sui-testnet") as AppConfig["network"];
+  const configuredNetwork = readEnv("SUI_NETWORK", process.env.NEXT_PUBLIC_SUI_NETWORK || "sui-testnet") ?? "sui-testnet";
+  const network = (SUI_NETWORKS[configuredNetwork as AppConfig["network"]]
+    ? configuredNetwork
+    : "sui-testnet") as AppConfig["network"];
   const networkDefaults = SUI_NETWORKS[network] ?? SUI_NETWORKS["sui-testnet"];
   const deploymentDefaults =
     network === "sui-testnet" ? TESTNET_DEPLOYMENT : { packageId: "0x0", vaultId: undefined, registryId: undefined };
+  const defaultDbPath = isVercel ? ":memory:" : path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db");
 
   return {
     network,
@@ -37,11 +40,7 @@ export function loadServerConfig(): AppConfig {
       readEnv("SUI_FULLNODE_URL", readEnv("NEXT_PUBLIC_SUI_FULLNODE_URL", networkDefaults.grpcUrl)) ??
       networkDefaults.grpcUrl,
     ownerAddress: readEnv("OWNER_ADDRESS", "") ?? "",
-    dbPath:
-      readEnv(
-        "DB_PATH",
-        isVercel ? ":memory:" : path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db"),
-      ) ?? (isVercel ? ":memory:" : path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db")),
+    dbPath: isVercel ? ":memory:" : (readEnv("DB_PATH", defaultDbPath) ?? defaultDbPath),
     vaultId: readEnv("SUI_VAULT_ID", process.env.NEXT_PUBLIC_SUI_VAULT_ID || deploymentDefaults.vaultId),
     registryId: readEnv("SUI_REGISTRY_ID", process.env.NEXT_PUBLIC_SUI_REGISTRY_ID || deploymentDefaults.registryId),
     coinType: readEnv("SUI_COIN_TYPE", process.env.NEXT_PUBLIC_SUI_COIN_TYPE || DEFAULT_COIN_TYPE) ?? DEFAULT_COIN_TYPE,

@@ -4,6 +4,8 @@ import path from "node:path";
 const workspaceRoot = process.cwd();
 const sourceDir = path.join(workspaceRoot, "packages", "nextjs", ".next");
 const targetDir = path.join(workspaceRoot, ".next");
+const sourcePublicDir = path.join(workspaceRoot, "packages", "nextjs", "public");
+const targetPublicDir = path.join(workspaceRoot, "public");
 
 if (!fs.existsSync(sourceDir)) {
   throw new Error(`Next.js build output not found at ${sourceDir}`);
@@ -11,6 +13,17 @@ if (!fs.existsSync(sourceDir)) {
 
 fs.rmSync(targetDir, { recursive: true, force: true });
 fs.cpSync(sourceDir, targetDir, { recursive: true });
+
+if (fs.existsSync(sourcePublicDir)) {
+  fs.rmSync(targetPublicDir, { recursive: true, force: true });
+  fs.cpSync(sourcePublicDir, targetPublicDir, { recursive: true });
+
+  const faviconPng = path.join(targetPublicDir, "favicon.png");
+  const faviconIco = path.join(targetPublicDir, "favicon.ico");
+  if (fs.existsSync(faviconPng) && !fs.existsSync(faviconIco)) {
+    fs.copyFileSync(faviconPng, faviconIco);
+  }
+}
 
 const nftFiles = [];
 

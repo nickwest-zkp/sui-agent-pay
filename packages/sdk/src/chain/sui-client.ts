@@ -226,18 +226,18 @@ function extractExecutionFailure(rawResponse: unknown): string | undefined {
 
 export class SuiChainClient {
   readonly config: SuiAppConfig;
-  private readonly clientPromise: Promise<SuiClientLike>;
+  private clientPromise: Promise<SuiClientLike> | undefined;
 
   constructor(config: SuiAppConfig) {
     this.config = config;
-    const networkConfig = SUI_NETWORKS[config.network];
-    this.clientPromise = loadSuiRuntime().then(({ SuiGrpcClient }) => new SuiGrpcClient({
-      network: networkConfig.sdkNetwork,
-      baseUrl: config.fullnodeUrl || networkConfig.grpcUrl,
-    }));
   }
 
   private async getClient(): Promise<SuiClientLike> {
+    const networkConfig = SUI_NETWORKS[this.config.network] ?? SUI_NETWORKS["sui-testnet"];
+    this.clientPromise ??= loadSuiRuntime().then(({ SuiGrpcClient }) => new SuiGrpcClient({
+      network: networkConfig.sdkNetwork,
+      baseUrl: this.config.fullnodeUrl || networkConfig.grpcUrl,
+    }));
     return this.clientPromise;
   }
 
