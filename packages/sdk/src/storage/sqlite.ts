@@ -11,7 +11,7 @@ import type {
   TelegramBinding,
 } from "../types";
 
-type StorageMode = "json";
+type StorageMode = "json" | "memory";
 
 type JsonState = {
   agents: AgentConfig[];
@@ -46,26 +46,32 @@ function createEmptyState(): JsonState {
 }
 
 export class Storage {
-  private readonly filePath: string;
+  private readonly filePath: string | null;
   private readonly mode: StorageMode;
   private state: JsonState;
 
   constructor(dbPath: string) {
-    const parsed = path.parse(dbPath);
-    this.filePath = path.join(parsed.dir, `${parsed.name}.json`);
-    this.mode = "json";
+    this.mode = dbPath === ":memory:" || dbPath === "memory" ? "memory" : "json";
+    this.filePath = this.mode === "json" ? this.resolveFilePath(dbPath) : null;
 
-    const parent = path.dirname(this.filePath);
-    if (parent && parent !== ".") {
-      fs.mkdirSync(parent, { recursive: true });
+    if (this.filePath) {
+      const parent = path.dirname(this.filePath);
+      if (parent && parent !== ".") {
+        fs.mkdirSync(parent, { recursive: true });
+      }
     }
 
     this.state = this.readState();
     this.flush();
   }
 
+  private resolveFilePath(dbPath: string) {
+    const parsed = path.parse(dbPath);
+    return path.join(parsed.dir, `${parsed.name}.json`);
+  }
+
   private readState(): JsonState {
-    if (!fs.existsSync(this.filePath)) {
+    if (!this.filePath || !fs.existsSync(this.filePath)) {
       return createEmptyState();
     }
 
@@ -92,21 +98,17 @@ export class Storage {
   }
 
   private flush(): void {
+    if (!this.filePath) return;
     fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), "utf8");
   }
 
   saveAgent(agent: AgentConfig): void {
-    this.state.agents = [
-      clone(agent),
-      ...this.state.agents.filter(item => item.agentId !== agent.agentId),
-    ];
+    this.state.agents = [clone(agent), ...this.state.agents.filter(item => item.agentId !== agent.agentId)];
     this.flush();
   }
 
   markAgentRevoked(agentId: string, revokedAt: string): void {
-    this.state.agents = this.state.agents.map(agent =>
-      agent.agentId === agentId ? { ...agent, revokedAt } : agent,
-    );
+    this.state.agents = this.state.agents.map(agent => (agent.agentId === agentId ? { ...agent, revokedAt } : agent));
     this.flush();
   }
 
@@ -116,16 +118,11 @@ export class Storage {
   }
 
   listAgents(): AgentConfig[] {
-    return clone(
-      [...this.state.agents].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    );
+    return clone([...this.state.agents].sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
   }
 
   savePolicy(policy: AgentPolicy): void {
-    this.state.policies = [
-      clone(policy),
-      ...this.state.policies.filter(item => item.agentId !== policy.agentId),
-    ];
+    this.state.policies = [clone(policy), ...this.state.policies.filter(item => item.agentId !== policy.agentId)];
     this.flush();
   }
 
@@ -135,10 +132,7 @@ export class Storage {
   }
 
   saveReceipt(receipt: AuditReceipt): void {
-    this.state.receipts = [
-      clone(receipt),
-      ...this.state.receipts.filter(item => item.paymentId !== receipt.paymentId),
-    ];
+    this.state.receipts = [clone(receipt), ...this.state.receipts.filter(item => item.paymentId !== receipt.paymentId)];
     this.flush();
   }
 
@@ -152,11 +146,7 @@ export class Storage {
   }
 
   getRecentReceipts(limit = 100): AuditReceipt[] {
-    return clone(
-      [...this.state.receipts]
-        .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
-        .slice(0, limit),
-    );
+    return clone([...this.state.receipts].sort((left, right) => right.timestamp.localeCompare(left.timestamp)).slice(0, limit));
   }
 
   getDailyBudget(agentId: string, date?: string): BudgetRecord | null {
@@ -185,10 +175,7 @@ export class Storage {
   }
 
   saveService(service: PaidService): void {
-    this.state.services = [
-      clone(service),
-      ...this.state.services.filter(item => item.serviceId !== service.serviceId),
-    ];
+    this.state.services = [clone(service), ...this.state.services.filter(item => item.serviceId !== service.serviceId)];
     this.flush();
   }
 
@@ -198,9 +185,7 @@ export class Storage {
   }
 
   listServices(): PaidService[] {
-    return clone(
-      [...this.state.services].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    );
+    return clone([...this.state.services].sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
   }
 
   deleteService(serviceId: string): boolean {
@@ -214,10 +199,7 @@ export class Storage {
   }
 
   saveApprovalRequest(request: ApprovalRequest): void {
-    this.state.approvals = [
-      clone(request),
-      ...this.state.approvals.filter(item => item.approvalId !== request.approvalId),
-    ];
+    this.state.approvals = [clone(request), ...this.state.approvals.filter(item => item.approvalId !== request.approvalId)];
     this.flush();
   }
 
@@ -232,11 +214,7 @@ export class Storage {
   }
 
   listApprovalRequests(limit = 50): ApprovalRequest[] {
-    return clone(
-      [...this.state.approvals]
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-        .slice(0, limit),
-    );
+    return clone([...this.state.approvals].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, limit));
   }
 
   updateApprovalRequest(approvalId: string, patch: Partial<ApprovalRequest>): ApprovalRequest | null {
@@ -274,9 +252,7 @@ export class Storage {
   }
 
   listTelegramBindings(): TelegramBinding[] {
-    return clone(
-      [...this.state.telegramBindings].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-    );
+    return clone([...this.state.telegramBindings].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
   }
 
   deleteTelegramBinding(walletAddress: string): boolean {
@@ -327,9 +303,7 @@ export class Storage {
     const normalizedWalletAddress = walletAddress?.toLowerCase();
     return clone(
       [...this.state.contractWhitelist]
-        .filter(entry =>
-          normalizedWalletAddress ? entry.walletAddress.toLowerCase() === normalizedWalletAddress : true,
-        )
+        .filter(entry => (normalizedWalletAddress ? entry.walletAddress.toLowerCase() === normalizedWalletAddress : true))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     );
   }

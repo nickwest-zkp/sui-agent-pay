@@ -24,6 +24,7 @@ const TESTNET_DEPLOYMENT = {
 } as const;
 
 export function loadServerConfig(): AppConfig {
+  const isVercel = process.env.VERCEL === "1" || process.env.VERCEL === "true";
   const network = (readEnv("SUI_NETWORK", process.env.NEXT_PUBLIC_SUI_NETWORK || "sui-testnet") ??
     "sui-testnet") as AppConfig["network"];
   const networkDefaults = SUI_NETWORKS[network] ?? SUI_NETWORKS["sui-testnet"];
@@ -37,8 +38,10 @@ export function loadServerConfig(): AppConfig {
       networkDefaults.grpcUrl,
     ownerAddress: readEnv("OWNER_ADDRESS", "") ?? "",
     dbPath:
-      readEnv("DB_PATH", path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db")) ??
-      path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db"),
+      readEnv(
+        "DB_PATH",
+        isVercel ? ":memory:" : path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db"),
+      ) ?? (isVercel ? ":memory:" : path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db")),
     vaultId: readEnv("SUI_VAULT_ID", process.env.NEXT_PUBLIC_SUI_VAULT_ID || deploymentDefaults.vaultId),
     registryId: readEnv("SUI_REGISTRY_ID", process.env.NEXT_PUBLIC_SUI_REGISTRY_ID || deploymentDefaults.registryId),
     coinType: readEnv("SUI_COIN_TYPE", process.env.NEXT_PUBLIC_SUI_COIN_TYPE || DEFAULT_COIN_TYPE) ?? DEFAULT_COIN_TYPE,
