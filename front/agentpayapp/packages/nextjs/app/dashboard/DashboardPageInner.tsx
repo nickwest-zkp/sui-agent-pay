@@ -296,6 +296,7 @@ function DashboardPageContent() {
   const [trackedApprovalToken, setTrackedApprovalToken] = useState("");
   const [trackedApproval, setTrackedApproval] = useState<BackendApproval | null>(null);
   const [latestTelegramApproval, setLatestTelegramApproval] = useState<MockAgentResponse["telegram"] | null>(null);
+  const [expiredSessionPage, setExpiredSessionPage] = useState(1);
   const [sdkAgentId, setSdkAgentId] = useState("");
   const [sdkSessionKey, setSdkSessionKey] = useState("");
   const [sdkPaymentReason, setSdkPaymentReason] = useState("agent runtime payment");
@@ -546,10 +547,29 @@ function DashboardPageContent() {
         ...(init?.headers ?? {}),
       },
     });
-    const data = (await response.json()) as T & { error?: string };
-    if (!response.ok) {
-      throw new Error(data.error || "Request failed");
+    const responseText = await response.text();
+    let data: (T & { error?: string; details?: unknown }) | null = null;
+
+    if (responseText) {
+      try {
+        data = JSON.parse(responseText) as T & { error?: string; details?: unknown };
+      } catch {
+        data = null;
+      }
     }
+
+    if (!response.ok) {
+      const fallbackError =
+        responseText.trim().startsWith("<")
+          ? `Request failed with non-JSON response (${response.status} ${response.statusText})`
+          : responseText.trim() || `Request failed (${response.status} ${response.statusText})`;
+      throw new Error(data?.error || fallbackError);
+    }
+
+    if (data === null) {
+      throw new Error(`Expected JSON response but received ${responseText.trim().startsWith("<") ? "HTML" : "plain text"}`);
+    }
+
     return data;
   }
 
@@ -1252,6 +1272,7 @@ function DashboardPageContent() {
   const latestBackendService = backendServices[0] ?? null;
   const olderBackendServices = backendServices.slice(1);
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const expiredSessionPageSize = 4;
   const expiredBackendAgents = backendAgents.filter(
     agent => !agent.revokedAt && Boolean(agent.session?.expiry) && (agent.session?.expiry ?? 0) <= nowSeconds,
   );
@@ -1259,6 +1280,18 @@ function DashboardPageContent() {
     const expiry = agent.session?.expiry ?? 0;
     return !agent.revokedAt && expiry > nowSeconds && expiry - nowSeconds <= 6 * 60 * 60;
   });
+  const expiredSessionPageCount = Math.max(1, Math.ceil(expiredBackendAgents.length / expiredSessionPageSize));
+  const normalizedExpiredSessionPage = Math.min(expiredSessionPage, expiredSessionPageCount);
+  const pagedExpiredBackendAgents = expiredBackendAgents.slice(
+    (normalizedExpiredSessionPage - 1) * expiredSessionPageSize,
+    normalizedExpiredSessionPage * expiredSessionPageSize,
+  );
+  const expiredSessionPageStart = expiredBackendAgents.length === 0 ? 0 : (normalizedExpiredSessionPage - 1) * expiredSessionPageSize + 1;
+  const expiredSessionPageEnd = Math.min(normalizedExpiredSessionPage * expiredSessionPageSize, expiredBackendAgents.length);
+
+  useEffect(() => {
+    setExpiredSessionPage(current => Math.min(current, Math.max(1, Math.ceil(expiredBackendAgents.length / expiredSessionPageSize))));
+  }, [expiredBackendAgents.length]);
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 lg:px-8 lg:py-8">
@@ -1651,7 +1684,7 @@ function DashboardPageContent() {
         <div className="rounded-[1.75rem] border border-base-300/70 bg-base-100 p-6 shadow-lg shadow-base-300/20">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-lg font-bold">Runtime Snapshot</p>
+              <p className="text-lg font-bold">4. Runtime Snapshot</p>
               <p className="mt-1 text-sm text-base-content/55">
                 Runtime status, latest local agents, and recent audit activity.
               </p>
@@ -1677,7 +1710,7 @@ function DashboardPageContent() {
                         <span className="badge badge-warning">{expiredBackendAgents.length}</span>
                       </div>
                       <div className="mt-3 space-y-3">
-                        {expiredBackendAgents.map(agent => (
+                        {pagedExpiredBackendAgents.map(agent => (
                           <div key={agent.agentId} className="rounded-2xl border border-warning/20 bg-base-100/80 p-4">
                             <div className="flex flex-wrap items-start justify-between gap-3">
                               <div>
@@ -1713,6 +1746,32 @@ function DashboardPageContent() {
                           </div>
                         ))}
                       </div>
+                      {expiredBackendAgents.length > expiredSessionPageSize && (
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-warning/20 pt-3">
+                          <p className="m-0 text-xs text-base-content/65">
+                            Showing {expiredSessionPageStart}-{expiredSessionPageEnd} of {expiredBackendAgents.length}
+                          </p>
+                          <div className="join">
+                            <button
+                              className="btn btn-sm join-item"
+                              disabled={normalizedExpiredSessionPage === 1}
+                              onClick={() => setExpiredSessionPage(current => Math.max(1, current - 1))}
+                            >
+                              Prev
+                            </button>
+                            <button className="btn btn-sm join-item btn-disabled pointer-events-none">
+                              Page {normalizedExpiredSessionPage} / {expiredSessionPageCount}
+                            </button>
+                            <button
+                              className="btn btn-sm join-item"
+                              disabled={normalizedExpiredSessionPage === expiredSessionPageCount}
+                              onClick={() => setExpiredSessionPage(current => Math.min(expiredSessionPageCount, current + 1))}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -2,6 +2,7 @@ import { withSdk } from "~~/lib/server/agent-pay-sdk";
 import { fail, ok } from "~~/lib/server/api";
 import { buildDeepBookSwapMetadata } from "~~/lib/deepbook";
 import { buildDemoAgentTrace, createTaskId, parseAgentInstruction } from "~~/lib/server/demo-agent";
+import { sendTelegramApprovalRequest } from "~~/lib/server/telegram";
 
 export const runtime = "nodejs";
 
@@ -140,11 +141,6 @@ export async function POST(request: Request) {
     let telegram: unknown = undefined;
 
     if (approvalRequest?.approvalToken) {
-      const appBaseUrl =
-        process.env.NEXT_PUBLIC_APP_BASE_URL ??
-        process.env.APP_BASE_URL ??
-        "http://localhost:3000";
-
       if (!resolvedChatId) {
         telegram = {
           sent: false,
@@ -152,32 +148,17 @@ export async function POST(request: Request) {
         };
       } else {
         try {
-          const response = await fetch(`${appBaseUrl}/api/tg/approve`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              approvalToken: approvalRequest.approvalToken,
-              text:
-                parsed.kind === "contract_call"
-                  ? `Approval required for agent ${body.agentId}: call ${parsed.target}. Reason: ${parsed.reason}`
-                  : parsed.kind === "deepbook_swap"
-                    ? `Approval required for agent ${body.agentId}: swap ${parsed.amountInput} ${parsed.inputSymbol} to ${parsed.outputSymbol} via DeepBook. Reason: ${parsed.reason}`
+          telegram = await sendTelegramApprovalRequest({
+            approvalToken: approvalRequest.approvalToken,
+            text:
+              parsed.kind === "contract_call"
+                ? `Approval required for agent ${body.agentId}: call ${parsed.target}. Reason: ${parsed.reason}`
+                : parsed.kind === "deepbook_swap"
+                  ? `Approval required for agent ${body.agentId}: swap ${parsed.amountInput} ${parsed.inputSymbol} to ${parsed.outputSymbol} via DeepBook. Reason: ${parsed.reason}`
                   : `Approval required for agent ${body.agentId}: ${parsed.amountInput} to ${parsed.recipient}. Reason: ${parsed.reason}`,
-              chatId: resolvedChatId,
-              walletAddress: body.walletAddress,
-            }),
+            chatId: resolvedChatId,
+            walletAddress: body.walletAddress,
           });
-
-          const responseJson = await response.json();
-          telegram = response.ok
-            ? responseJson
-            : {
-                sent: false,
-                error: responseJson?.error ?? "Telegram approval request failed",
-                details: responseJson?.details,
-              };
         } catch (telegramError) {
           telegram = {
             sent: false,
