@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "pnpm --dir packages/nextjs build",
+    "build": "pnpm --dir packages/nextjs build && node ./scripts/sync-next-output.mjs",
     "check-types": "pnpm --dir packages/nextjs check-types",
     "dev": "pnpm --dir packages/nextjs dev",
     "format": "pnpm --dir packages/nextjs format",
