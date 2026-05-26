@@ -83,15 +83,15 @@ interface SuiRuntime {
     secretKey: Uint8Array;
   };
   Ed25519Keypair: {
-    fromSecretKey(secretKey: Uint8Array): SuiKeypairLike;
+    fromSecretKey(secretKey: Uint8Array): any;
   };
   Secp256k1Keypair: {
-    fromSecretKey(secretKey: Uint8Array): SuiKeypairLike;
+    fromSecretKey(secretKey: Uint8Array): any;
   };
   Secp256r1Keypair: {
-    fromSecretKey(secretKey: Uint8Array): SuiKeypairLike;
+    fromSecretKey(secretKey: Uint8Array): any;
   };
-  SuiGrpcClient: new (args: { network: string; baseUrl: string }) => SuiClientLike;
+  SuiGrpcClient: new (args: { network: string; baseUrl: string }) => any;
   Transaction: new () => any;
 }
 
