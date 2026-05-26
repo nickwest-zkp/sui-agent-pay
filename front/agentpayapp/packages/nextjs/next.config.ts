@@ -4,7 +4,7 @@ import path from "path";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   devIndicators: false,
-  distDir: process.env.NODE_ENV === "production" ? ".next-prod" : ".next-dev",
+  distDir: process.env.NODE_ENV === "production" ? ".next" : ".next-dev",
   experimental: {
     externalDir: true,
   },
