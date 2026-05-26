@@ -33,11 +33,24 @@ collectNftFiles(targetDir);
 for (const nftFile of nftFiles) {
   const raw = fs.readFileSync(nftFile, "utf8");
   const manifest = JSON.parse(raw);
+  const relativeNftPath = path.relative(targetDir, nftFile);
+  const sourceNftFile = path.join(sourceDir, relativeNftPath);
+  const sourceNftDir = path.dirname(sourceNftFile);
+  const targetNftDir = path.dirname(nftFile);
 
   if (Array.isArray(manifest.files)) {
-    manifest.files = manifest.files.map(file =>
-      typeof file === "string" ? file.replace(/\.\.\/\.\.\/\.\.\/node_modules\//g, "../node_modules/") : file,
-    );
+    manifest.files = manifest.files.map(file => {
+      if (typeof file !== "string") {
+        return file;
+      }
+
+      const sourceFile = path.resolve(sourceNftDir, file);
+      const targetFile = sourceFile.startsWith(sourceDir + path.sep)
+        ? path.join(targetDir, path.relative(sourceDir, sourceFile))
+        : sourceFile;
+
+      return path.relative(targetNftDir, targetFile).replaceAll(path.sep, "/");
+    });
   }
 
   fs.writeFileSync(nftFile, `${JSON.stringify(manifest)}\n`);
