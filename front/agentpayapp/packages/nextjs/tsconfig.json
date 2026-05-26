@@ -21,6 +21,12 @@
     "paths": {
       "~~/*": [
         "./*"
+      ],
+      "@sui-agent-pay/sdk": [
+        "../../../../packages/sdk/src/index.ts"
+      ],
+      "@sui-agent-pay/sdk/*": [
+        "../../../../packages/sdk/src/*"
       ]
     },
     "plugins": [
