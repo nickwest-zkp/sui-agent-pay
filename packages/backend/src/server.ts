@@ -571,7 +571,7 @@ function authenticate(request: Request) {
   return request.headers.get("x-agent-pay-key") === apiKey;
 }
 
-async function dispatch(request: Request) {
+export async function dispatch(request: Request) {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") {
     return withCors(new Response(null, { status: 204 }));
@@ -627,15 +627,22 @@ async function writeResponse(res: http.ServerResponse, response: Response) {
   res.end(buffer);
 }
 
-const port = Number(process.env.PORT || 8787);
-const server = http.createServer(async (req, res) => {
+export async function handleNodeRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   try {
     await writeResponse(res, await dispatch(await requestFromIncoming(req)));
   } catch (error) {
     await writeResponse(res, withCors(fail("Unhandled backend error", 500, error instanceof Error ? error.message : String(error))));
   }
-});
+}
 
-server.listen(port, () => {
-  console.log(`sui-agent-pay backend listening on http://127.0.0.1:${port}`);
-});
+export function startServer(port = Number(process.env.PORT || 8787)) {
+  const server = http.createServer(handleNodeRequest);
+  server.listen(port, () => {
+    console.log(`sui-agent-pay backend listening on http://127.0.0.1:${port}`);
+  });
+  return server;
+}
+
+if (require.main === module) {
+  startServer();
+}
