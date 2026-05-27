@@ -55,8 +55,7 @@ function parseAmountInput(value: string, decimals: number) {
 
   const normalizedWhole = whole.replace(/^0+(?=\d)/, "") || "0";
   const normalizedFraction = `${fraction}${"0".repeat(decimals)}`.slice(0, decimals);
-  const combined = `${normalizedWhole}${normalizedFraction}`.replace(/^0+(?=\d)/, "") || "0";
-  return combined;
+  return `${normalizedWhole}${normalizedFraction}`.replace(/^0+(?=\d)/, "") || "0";
 }
 
 function normalizeInstruction(instruction: string) {
@@ -102,18 +101,18 @@ function extractAmountInput(normalized: string) {
 }
 
 function parseJsonArray(raw: string, fieldName: string): unknown[] {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      throw new Error(`${fieldName} must be a JSON array`);
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("JSON array")) {
+      throw error;
+    }
     throw new Error(`${fieldName} must be valid JSON`);
   }
-
-  if (!Array.isArray(parsed)) {
-    throw new Error(`${fieldName} must be a JSON array`);
-  }
-
-  return parsed;
 }
 
 function extractBracketArray(source: string, marker: RegExp, fieldName: string): string[] | ContractCallArgumentInput[] {
@@ -122,8 +121,7 @@ function extractBracketArray(source: string, marker: RegExp, fieldName: string):
     return [];
   }
 
-  const parsed = parseJsonArray(match[1], fieldName);
-  return parsed as string[] | ContractCallArgumentInput[];
+  return parseJsonArray(match[1], fieldName) as string[] | ContractCallArgumentInput[];
 }
 
 function parseContractCallInstruction(instruction: string): ParsedContractCallInstruction | null {
@@ -198,28 +196,21 @@ function parseTransferInstruction(instruction: string, decimals: number): Parsed
     throw new Error("Instruction is empty");
   }
 
-  const recipient = extractRecipient(normalized);
-  const amountInput = extractAmountInput(normalized);
-
   return {
     kind: "payment",
-    recipient,
-    amountInput,
-    amount: parseAmountInput(amountInput, decimals),
+    recipient: extractRecipient(normalized),
+    amountInput: extractAmountInput(normalized),
+    amount: parseAmountInput(extractAmountInput(normalized), decimals),
     reason: normalized,
   };
 }
 
 export function parseAgentInstruction(instruction: string, decimals: number): ParsedAgentInstruction {
   const contractCall = parseContractCallInstruction(instruction);
-  if (contractCall) {
-    return contractCall;
-  }
+  if (contractCall) return contractCall;
 
   const deepBookSwap = parseDeepBookSwapInstruction(instruction, decimals);
-  if (deepBookSwap) {
-    return deepBookSwap;
-  }
+  if (deepBookSwap) return deepBookSwap;
 
   return parseTransferInstruction(instruction, decimals);
 }
@@ -231,60 +222,36 @@ export function buildDemoAgentTrace(args: {
 }) {
   if (args.parsed.kind === "deepbook_swap") {
     return [
-      {
-        step: 1,
-        type: "planner",
-        message: `Received instruction: ${args.instruction}`,
-      },
+      { step: 1, type: "planner", message: `Received instruction: ${args.instruction}` },
       {
         step: 2,
         type: "skill",
         message: `Wallet skill parsed DeepBook swap ${args.parsed.amountInput} ${args.parsed.inputSymbol} -> ${args.parsed.outputSymbol}`,
       },
-      {
-        step: 3,
-        type: "tool",
-        message: `Calling runtime DeepBook swap for agentId=${args.agentId}`,
-      },
+      { step: 3, type: "tool", message: `Calling runtime DeepBook swap for agentId=${args.agentId}` },
     ];
   }
 
   if (args.parsed.kind === "contract_call") {
     return [
-      {
-        step: 1,
-        type: "planner",
-        message: `Received instruction: ${args.instruction}`,
-      },
+      { step: 1, type: "planner", message: `Received instruction: ${args.instruction}` },
       {
         step: 2,
         type: "skill",
         message: `Wallet skill parsed contract target=${args.parsed.target} typeArgs=${args.parsed.typeArguments.length} args=${args.parsed.arguments.length}`,
       },
-      {
-        step: 3,
-        type: "tool",
-        message: `Calling runtime contract call for agentId=${args.agentId}`,
-      },
+      { step: 3, type: "tool", message: `Calling runtime contract call for agentId=${args.agentId}` },
     ];
   }
 
   return [
-    {
-      step: 1,
-      type: "planner",
-      message: `Received instruction: ${args.instruction}`,
-    },
+    { step: 1, type: "planner", message: `Received instruction: ${args.instruction}` },
     {
       step: 2,
       type: "skill",
       message: `Wallet skill parsed recipient=${args.parsed.recipient} amount=${args.parsed.amountInput}`,
     },
-    {
-      step: 3,
-      type: "tool",
-      message: `Calling runtime payment for agentId=${args.agentId}`,
-    },
+    { step: 3, type: "tool", message: `Calling runtime payment for agentId=${args.agentId}` },
   ];
 }
 

@@ -11,7 +11,10 @@
     "build:sui:move": "cd sui && sui move build",
     "build:sdk": "cd packages/sdk && pnpm build",
     "build:cli": "cd packages/cli && pnpm build",
-    "build:mcp": "cd packages/mcp-server && pnpm build"
+    "build:mcp": "cd packages/mcp-server && pnpm build",
+    "build:backend": "cd packages/backend && pnpm build",
+    "start:backend": "cd packages/backend && pnpm start",
+    "dev:backend": "cd packages/backend && pnpm dev"
   },
   "devDependencies": {
     "next": "~15.2.9",

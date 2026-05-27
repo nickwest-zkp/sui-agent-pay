@@ -21,12 +21,6 @@
     "paths": {
       "~~/*": [
         "./*"
-      ],
-      "@sui-agent-pay/sdk": [
-        "../../../../packages/sdk/src/index.ts"
-      ],
-      "@sui-agent-pay/sdk/*": [
-        "../../../../packages/sdk/src/*"
       ]
     },
     "plugins": [
@@ -38,7 +32,6 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
-    ".next-dev/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts"
   ],

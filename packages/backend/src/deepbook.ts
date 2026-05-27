@@ -1,18 +1,4 @@
-type DeepBookSwapMetadata = {
-  packageId: string;
-  walletAddress?: string;
-  inputCoinType: string;
-  outputCoinType: string;
-  inputAmount: string;
-  deepCoinType: string;
-  route: Array<{
-    poolId: string;
-    baseCoinType: string;
-    quoteCoinType: string;
-    direction: "base_to_quote" | "quote_to_base";
-    minOutputAmount: string;
-  }>;
-};
+import type { DeepBookSwapMetadata } from "@sui-agent-pay/sdk";
 
 const TESTNET_DEEPBOOK_PACKAGE_ID = "0xfb28c4cbc6865bd1c897d26aecbe1f8792d1509a20ffec692c800660cbec6982";
 const TESTNET_DEEP_COIN_TYPE = "0x36dbef866a1d62bf7328989a10fb2f07d769f4ee587c0de4a0a256e57e0a58a8::deep::DEEP";
@@ -74,13 +60,4 @@ export function buildDeepBookSwapMetadata(args: {
   }
 
   throw new Error(`DeepBook demo swap does not support ${fromSymbol} -> ${toSymbol} yet`);
-}
-
-export function getDeepBookDemoSummary() {
-  return {
-    network: "sui-testnet",
-    packageId: TESTNET_DEEPBOOK_PACKAGE_ID,
-    deepCoinType: TESTNET_DEEP_COIN_TYPE,
-    pools: TESTNET_DEEPBOOK_POOLS,
-  };
 }

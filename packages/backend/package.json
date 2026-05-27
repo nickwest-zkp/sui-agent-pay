@@ -1,0 +1,20 @@
+{
+  "name": "@sui-agent-pay/backend",
+  "version": "0.1.0",
+  "description": "Standalone HTTP backend for the sui-agent-pay demo",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@sui-agent-pay/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}

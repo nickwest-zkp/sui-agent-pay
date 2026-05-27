@@ -1,12 +1,11 @@
+import { AgentPaySDK } from "@sui-agent-pay/sdk";
 import type { AppConfig } from "@sui-agent-pay/sdk";
 import os from "os";
 import path from "path";
 
-type AgentPaySdkInstance = import("@sui-agent-pay/sdk").AgentPaySDK;
-
 declare global {
   // eslint-disable-next-line no-var
-  var __agentPaySdkSingleton: AgentPaySdkInstance | undefined;
+  var __agentPayBackendSdkSingleton: AgentPaySDK | undefined;
 }
 
 function readEnv(name: string, fallback?: string) {
@@ -33,7 +32,6 @@ const NETWORK_DEFAULTS = {
 } as const;
 
 export function loadServerConfig(): AppConfig {
-  const isVercel = process.env.VERCEL === "1" || process.env.VERCEL === "true";
   const configuredNetwork = readEnv("SUI_NETWORK", process.env.NEXT_PUBLIC_SUI_NETWORK || "sui-testnet") ?? "sui-testnet";
   const network = (NETWORK_DEFAULTS[configuredNetwork as AppConfig["network"]]
     ? configuredNetwork
@@ -41,7 +39,7 @@ export function loadServerConfig(): AppConfig {
   const networkDefaults = NETWORK_DEFAULTS[network] ?? NETWORK_DEFAULTS["sui-testnet"];
   const deploymentDefaults =
     network === "sui-testnet" ? TESTNET_DEPLOYMENT : { packageId: "0x0", vaultId: undefined, registryId: undefined };
-  const defaultDbPath = isVercel ? ":memory:" : path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db");
+  const defaultDbPath = path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db");
 
   return {
     network,
@@ -49,7 +47,7 @@ export function loadServerConfig(): AppConfig {
       readEnv("SUI_FULLNODE_URL", readEnv("NEXT_PUBLIC_SUI_FULLNODE_URL", networkDefaults.grpcUrl)) ??
       networkDefaults.grpcUrl,
     ownerAddress: readEnv("OWNER_ADDRESS", "") ?? "",
-    dbPath: isVercel ? ":memory:" : (readEnv("DB_PATH", defaultDbPath) ?? defaultDbPath),
+    dbPath: readEnv("DB_PATH", defaultDbPath) ?? defaultDbPath,
     vaultId: readEnv("SUI_VAULT_ID", process.env.NEXT_PUBLIC_SUI_VAULT_ID || deploymentDefaults.vaultId),
     registryId: readEnv("SUI_REGISTRY_ID", process.env.NEXT_PUBLIC_SUI_REGISTRY_ID || deploymentDefaults.registryId),
     coinType: readEnv("SUI_COIN_TYPE", process.env.NEXT_PUBLIC_SUI_COIN_TYPE || DEFAULT_COIN_TYPE) ?? DEFAULT_COIN_TYPE,
@@ -66,11 +64,10 @@ export function loadServerConfig(): AppConfig {
   };
 }
 
-export async function withSdk<T>(handler: (sdk: AgentPaySdkInstance) => Promise<T> | T): Promise<T> {
-  if (!globalThis.__agentPaySdkSingleton) {
-    const { AgentPaySDK } = await import("@sui-agent-pay/sdk");
-    globalThis.__agentPaySdkSingleton = new AgentPaySDK(loadServerConfig());
+export function getSdk() {
+  if (!globalThis.__agentPayBackendSdkSingleton) {
+    globalThis.__agentPayBackendSdkSingleton = new AgentPaySDK(loadServerConfig());
   }
 
-  return handler(globalThis.__agentPaySdkSingleton);
+  return globalThis.__agentPayBackendSdkSingleton;
 }

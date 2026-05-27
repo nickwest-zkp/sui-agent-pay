@@ -539,7 +539,11 @@ function DashboardPageContent() {
 
   async function apiRequest<T>(input: string, init?: RequestInit): Promise<T> {
     const apiKey = process.env.NEXT_PUBLIC_AGENT_PAY_API_KEY;
-    const response = await fetch(input, {
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+    const requestUrl = backendUrl && input.startsWith("/api/")
+      ? `${backendUrl.replace(/\/$/, "")}${input}`
+      : input;
+    const response = await fetch(requestUrl, {
       ...init,
       headers: {
         "Content-Type": "application/json",

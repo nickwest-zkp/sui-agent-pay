@@ -18,7 +18,6 @@
     "@heroicons/react": "~2.1.5",
     "@mysten/dapp-kit-react": "^2.0.1",
     "@mysten/sui": "^2.16.0",
-    "@sui-agent-pay/sdk": "file:../../../../packages/sdk",
     "daisyui": "5.0.9",
     "next": "~15.2.8",
     "react": "~19.2.3",
