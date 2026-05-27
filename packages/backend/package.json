@@ -4,12 +4,12 @@
   "description": "Standalone HTTP backend for the sui-agent-pay demo",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "pnpm --dir ../sdk build && tsc",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@sui-agent-pay/sdk": "workspace:*"
+    "@sui-agent-pay/sdk": "file:../sdk"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

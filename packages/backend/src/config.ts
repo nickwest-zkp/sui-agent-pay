@@ -3,6 +3,8 @@ import type { AppConfig } from "@sui-agent-pay/sdk";
 import os from "os";
 import path from "path";
 
+type SuiNetwork = AppConfig["network"];
+
 declare global {
   // eslint-disable-next-line no-var
   var __agentPayBackendSdkSingleton: AgentPaySDK | undefined;
@@ -31,12 +33,14 @@ const NETWORK_DEFAULTS = {
   "sui-mainnet": { grpcUrl: "https://fullnode.mainnet.sui.io:443" },
 } as const;
 
+function isKnownNetwork(value: string): value is SuiNetwork {
+  return value in NETWORK_DEFAULTS;
+}
+
 export function loadServerConfig(): AppConfig {
   const configuredNetwork = readEnv("SUI_NETWORK", process.env.NEXT_PUBLIC_SUI_NETWORK || "sui-testnet") ?? "sui-testnet";
-  const network = (NETWORK_DEFAULTS[configuredNetwork as AppConfig["network"]]
-    ? configuredNetwork
-    : "sui-testnet") as AppConfig["network"];
-  const networkDefaults = NETWORK_DEFAULTS[network] ?? NETWORK_DEFAULTS["sui-testnet"];
+  const network: SuiNetwork = isKnownNetwork(configuredNetwork) ? configuredNetwork : "sui-testnet";
+  const networkDefaults = NETWORK_DEFAULTS[network];
   const deploymentDefaults =
     network === "sui-testnet" ? TESTNET_DEPLOYMENT : { packageId: "0x0", vaultId: undefined, registryId: undefined };
   const defaultDbPath = path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db");

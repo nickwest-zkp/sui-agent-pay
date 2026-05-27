@@ -18,7 +18,7 @@ importers:
   packages/backend:
     dependencies:
       '@sui-agent-pay/sdk':
-        specifier: workspace:*
+        specifier: file:../sdk
         version: link:../sdk
     devDependencies:
       '@types/node':
