@@ -1112,6 +1112,7 @@ export class AgentPaySDK {
       requestedBy: options?.requestedBy,
       txHash: execution.txHash,
       executionPaymentId: execution.paymentId,
+      executionError: execution.error,
     });
   }
 

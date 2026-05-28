@@ -28041,7 +28041,8 @@ var require_dist = __commonJS({
           approvalNote: options?.note,
           requestedBy: options?.requestedBy,
           txHash: execution.txHash,
-          executionPaymentId: execution.paymentId
+          executionPaymentId: execution.paymentId,
+          executionError: execution.error
         });
       }
       rejectPaymentRequest(approvalToken, options) {
@@ -29420,8 +29421,10 @@ var routes = [
       const status = approvalData.status ?? (action === "approve" ? "approved" : "rejected");
       const txLine = approvalData.txHash ? `
 Transaction: ${approvalData.txHash}` : "";
+      const errorLine = approvalData.executionError ? `
+Execution error: ${approvalData.executionError}` : "";
       const summary = `Approval ${status} for agent ${approvalData.agentId ?? "unknown"}.
-Approval ID: ${approvalData.approvalId ?? "n/a"}${txLine}`;
+Approval ID: ${approvalData.approvalId ?? "n/a"}${txLine}${errorLine}`;
       notifyTelegram(summary).catch(() => {
       });
       return wantsHtml(request) ? renderHtml(action === "approve" ? "Approval Processed" : "Request Rejected", summary, status === "executed" || status === "approved" ? "success" : "info") : ok(data);

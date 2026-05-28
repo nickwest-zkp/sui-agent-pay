@@ -147,6 +147,7 @@ export interface ApprovalRequest {
   resolvedAt?: string;
   txHash?: string;
   executionPaymentId?: string;
+  executionError?: string;
 }
 
 export interface TelegramBinding {

@@ -591,10 +591,17 @@ const routes: Route[] = [
         action === "approve"
           ? await sdk.approvePaymentRequest(token, { requestedBy: "telegram-link" })
           : sdk.rejectPaymentRequest(token, { requestedBy: "telegram-link" });
-      const approvalData = data as { status?: string; txHash?: string; approvalId?: string; agentId?: string };
+      const approvalData = data as {
+        status?: string;
+        txHash?: string;
+        approvalId?: string;
+        agentId?: string;
+        executionError?: string;
+      };
       const status = approvalData.status ?? (action === "approve" ? "approved" : "rejected");
       const txLine = approvalData.txHash ? `\nTransaction: ${approvalData.txHash}` : "";
-      const summary = `Approval ${status} for agent ${approvalData.agentId ?? "unknown"}.\nApproval ID: ${approvalData.approvalId ?? "n/a"}${txLine}`;
+      const errorLine = approvalData.executionError ? `\nExecution error: ${approvalData.executionError}` : "";
+      const summary = `Approval ${status} for agent ${approvalData.agentId ?? "unknown"}.\nApproval ID: ${approvalData.approvalId ?? "n/a"}${txLine}${errorLine}`;
       notifyTelegram(summary).catch(() => {});
       return wantsHtml(request)
         ? renderHtml(action === "approve" ? "Approval Processed" : "Request Rejected", summary, status === "executed" || status === "approved" ? "success" : "info")
