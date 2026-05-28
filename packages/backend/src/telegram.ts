@@ -100,9 +100,12 @@ export async function sendTelegramApprovalRequest(input: {
   const messageLines = [input.text ?? "Payment approval required"];
   if (input.chatId) messageLines.push(`Telegram Chat ID: ${input.chatId}`);
   if (input.walletAddress) messageLines.push(`Wallet: ${input.walletAddress}`);
-  messageLines.push(`Approve: ${approveUrl}`);
-  messageLines.push(`Reject: ${rejectUrl}`);
-  if (!supportsInlineButtons) {
+  messageLines.push(`Approval token: ${input.approvalToken.slice(0, 12)}...${input.approvalToken.slice(-8)}`);
+  if (supportsInlineButtons) {
+    messageLines.push("Use the buttons below to approve or reject.");
+  } else {
+    messageLines.push(`Approve: ${approveUrl}`);
+    messageLines.push(`Reject: ${rejectUrl}`);
     messageLines.push("Inline buttons are disabled because APP_BASE_URL must be a public HTTPS URL for Telegram.");
   }
 
