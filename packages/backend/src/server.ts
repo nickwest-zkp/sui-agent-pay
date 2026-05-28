@@ -14,6 +14,29 @@ type Route = {
   handler: Handler;
 };
 
+type RuntimeAgentSeed = {
+  label?: string;
+  agentType?: "long_lived" | "temporary";
+  userId?: string;
+  sessionKey?: string;
+  sessionKeyPrivate?: string;
+  vaultId?: string;
+  coinType?: string;
+  allowedRecipients?: string[];
+  allowedTokens?: string[];
+  overrides?: Partial<{
+    maxPerTx: string;
+    maxTotal: string;
+    dailyBudget: string;
+    weeklyBudget: string;
+    validity: number;
+    approvalThreshold: string;
+  }>;
+  createdAt?: string;
+  agentId?: string;
+  policyId?: string;
+};
+
 function sanitizeAgent(agent: {
   agentId: string;
   label: string;
@@ -38,6 +61,38 @@ function sanitizeAgent(agent: {
     revokedAt: agent.revokedAt,
     hasStoredSessionKey: Boolean(agent.sessionKeyPrivate),
   };
+}
+
+function ensureRuntimeAgent(sdk: ReturnType<typeof getSdk>, agentId: string, seed?: RuntimeAgentSeed) {
+  try {
+    sdk.getSessionInfo(agentId);
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes(`Agent not found: ${agentId}`)) {
+      throw error;
+    }
+  }
+
+  if (!seed?.label || !seed.agentType || !seed.userId || !seed.sessionKey || !seed.sessionKeyPrivate || !seed.vaultId) {
+    throw new Error(`Agent not found: ${agentId}`);
+  }
+
+  sdk.registerLocalAgent({
+    label: seed.label,
+    agentType: seed.agentType,
+    userId: seed.userId,
+    sessionKey: seed.sessionKey,
+    sessionKeyPrivate: seed.sessionKeyPrivate,
+    vaultId: seed.vaultId,
+    coinType: seed.coinType,
+    allowedRecipients: seed.allowedRecipients,
+    allowedTokens: seed.allowedTokens,
+    overrides: seed.overrides,
+    createdAt: seed.createdAt,
+    agentId,
+    policyId: seed.policyId,
+  });
 }
 
 function isUserRuntimeError(message: string) {
@@ -431,7 +486,15 @@ const routes: Route[] = [
     method: "POST",
     path: "/api/mock-agent/pay",
     handler: async request => {
-      const body = await readJson<{ agentId?: string; instruction?: string; coinType?: string; coinDecimals?: number; chatId?: string; walletAddress?: string }>(request);
+      const body = await readJson<{
+        agentId?: string;
+        instruction?: string;
+        coinType?: string;
+        coinDecimals?: number;
+        chatId?: string;
+        walletAddress?: string;
+        runtimeAgent?: RuntimeAgentSeed;
+      }>(request);
       if (!body.agentId || !body.instruction) return fail("agentId and instruction are required");
       const coinDecimals =
         typeof body.coinDecimals === "number" && Number.isFinite(body.coinDecimals) && body.coinDecimals >= 0
@@ -440,6 +503,7 @@ const routes: Route[] = [
       const parsed = parseAgentInstruction(body.instruction, coinDecimals);
       const taskId = createTaskId();
       const sdk = getSdk();
+      ensureRuntimeAgent(sdk, body.agentId, body.runtimeAgent);
       const status = sdk.getSystemStatus();
       const paymentResult =
         parsed.kind === "contract_call"

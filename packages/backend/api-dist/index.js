@@ -28987,6 +28987,35 @@ function sanitizeAgent(agent) {
     hasStoredSessionKey: Boolean(agent.sessionKeyPrivate)
   };
 }
+function ensureRuntimeAgent(sdk, agentId, seed) {
+  try {
+    sdk.getSessionInfo(agentId);
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes(`Agent not found: ${agentId}`)) {
+      throw error;
+    }
+  }
+  if (!seed?.label || !seed.agentType || !seed.userId || !seed.sessionKey || !seed.sessionKeyPrivate || !seed.vaultId) {
+    throw new Error(`Agent not found: ${agentId}`);
+  }
+  sdk.registerLocalAgent({
+    label: seed.label,
+    agentType: seed.agentType,
+    userId: seed.userId,
+    sessionKey: seed.sessionKey,
+    sessionKeyPrivate: seed.sessionKeyPrivate,
+    vaultId: seed.vaultId,
+    coinType: seed.coinType,
+    allowedRecipients: seed.allowedRecipients,
+    allowedTokens: seed.allowedTokens,
+    overrides: seed.overrides,
+    createdAt: seed.createdAt,
+    agentId,
+    policyId: seed.policyId
+  });
+}
 function isUserRuntimeError(message) {
   return message.includes("Agent not found") || message.includes("session private key is not stored locally") || message.includes("session key is revoked") || message.includes("session key is expired") || message.includes("does not match the selected agent session key");
 }
@@ -29319,6 +29348,7 @@ var routes = [
       const parsed = parseAgentInstruction(body.instruction, coinDecimals);
       const taskId = createTaskId();
       const sdk = getSdk();
+      ensureRuntimeAgent(sdk, body.agentId, body.runtimeAgent);
       const status = sdk.getSystemStatus();
       const paymentResult = parsed.kind === "contract_call" ? await sdk.requestContractCallForAgent({
         taskId,

@@ -1005,6 +1005,10 @@ function DashboardPageContent() {
     setBackendError("");
 
     try {
+      const maxPerTxValue = parseAmountInput(maxPerTx, appConfig.coinDecimals).toString();
+      const maxTotalValue = parseAmountInput(maxTotal, appConfig.coinDecimals).toString();
+      const approvalThresholdValue = parseAmountInput(approvalThreshold, appConfig.coinDecimals).toString();
+      const validity = Math.max(1, Number(expiryHours || "0")) * 60 * 60;
       const data = await apiRequest<MockAgentResponse>("/api/mock-agent/pay", {
         method: "POST",
         body: JSON.stringify({
@@ -1014,6 +1018,26 @@ function DashboardPageContent() {
           walletAddress: account?.address,
           coinType: appConfig.coinType,
           coinDecimals: appConfig.coinDecimals,
+          runtimeAgent: {
+            agentId: sdkAgentId,
+            label: agentName,
+            agentType: backendAgentType,
+            userId: backendUserId,
+            sessionKey: sessionKeyAddress,
+            sessionKeyPrivate: sdkSessionKey,
+            vaultId: activeVaultId,
+            coinType: appConfig.coinType,
+            allowedRecipients: allowedRecipient ? [allowedRecipient] : [],
+            allowedTokens: [appConfig.coinType],
+            overrides: {
+              maxPerTx: maxPerTxValue,
+              maxTotal: maxTotalValue,
+              dailyBudget: maxTotalValue,
+              weeklyBudget: maxTotalValue,
+              validity,
+              approvalThreshold: approvalThresholdValue,
+            },
+          },
         }),
       });
 
