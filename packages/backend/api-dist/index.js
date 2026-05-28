@@ -28585,11 +28585,12 @@ function isKnownNetwork(value) {
   return value in NETWORK_DEFAULTS;
 }
 function loadServerConfig() {
+  const isVercel = process.env.VERCEL === "1" || process.env.VERCEL === "true";
   const configuredNetwork = readEnv("SUI_NETWORK", process.env.NEXT_PUBLIC_SUI_NETWORK || "sui-testnet") ?? "sui-testnet";
   const network = isKnownNetwork(configuredNetwork) ? configuredNetwork : "sui-testnet";
   const networkDefaults = NETWORK_DEFAULTS[network];
   const deploymentDefaults = network === "sui-testnet" ? TESTNET_DEPLOYMENT : { packageId: "0x0", vaultId: void 0, registryId: void 0 };
-  const defaultDbPath = import_path.default.join(import_os.default.homedir(), ".sui-agent-pay", "agent-pay.db");
+  const defaultDbPath = isVercel ? import_path.default.join(import_os.default.tmpdir(), "agent-pay.db") : import_path.default.join(import_os.default.homedir(), ".sui-agent-pay", "agent-pay.db");
   return {
     network,
     fullnodeUrl: readEnv("SUI_FULLNODE_URL", readEnv("NEXT_PUBLIC_SUI_FULLNODE_URL", networkDefaults.grpcUrl)) ?? networkDefaults.grpcUrl,

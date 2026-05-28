@@ -38,12 +38,13 @@ function isKnownNetwork(value: string): value is SuiNetwork {
 }
 
 export function loadServerConfig(): AppConfig {
+  const isVercel = process.env.VERCEL === "1" || process.env.VERCEL === "true";
   const configuredNetwork = readEnv("SUI_NETWORK", process.env.NEXT_PUBLIC_SUI_NETWORK || "sui-testnet") ?? "sui-testnet";
   const network: SuiNetwork = isKnownNetwork(configuredNetwork) ? configuredNetwork : "sui-testnet";
   const networkDefaults = NETWORK_DEFAULTS[network];
   const deploymentDefaults =
     network === "sui-testnet" ? TESTNET_DEPLOYMENT : { packageId: "0x0", vaultId: undefined, registryId: undefined };
-  const defaultDbPath = path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db");
+  const defaultDbPath = isVercel ? path.join(os.tmpdir(), "agent-pay.db") : path.join(os.homedir(), ".sui-agent-pay", "agent-pay.db");
 
   return {
     network,
