@@ -27988,6 +27988,10 @@ var require_dist = __commonJS({
       getApprovalRequestByToken(token) {
         return this.storage.getApprovalRequestByToken(token);
       }
+      restoreApprovalRequest(request) {
+        this.storage.saveApprovalRequest(request);
+        return request;
+      }
       async approvePaymentRequest(approvalToken, options) {
         const approval = this.storage.getApprovalRequestByToken(approvalToken);
         if (!approval) {
@@ -28940,8 +28944,9 @@ async function notifyTelegram(text, chatIdOverride, options) {
 }
 async function sendTelegramApprovalRequest(input) {
   const appBaseUrl = getAppBaseUrl();
-  const approveUrl = `${appBaseUrl}/api/tg/approve?token=${encodeURIComponent(input.approvalToken)}&action=approve`;
-  const rejectUrl = `${appBaseUrl}/api/tg/approve?token=${encodeURIComponent(input.approvalToken)}&action=reject`;
+  const stateParam = input.state ? `&state=${Buffer.from(JSON.stringify(input.state), "utf8").toString("base64url")}` : "";
+  const approveUrl = `${appBaseUrl}/api/tg/approve?token=${encodeURIComponent(input.approvalToken)}&action=approve${stateParam}`;
+  const rejectUrl = `${appBaseUrl}/api/tg/approve?token=${encodeURIComponent(input.approvalToken)}&action=reject${stateParam}`;
   const supportsInlineButtons = isTelegramInlineButtonUrl(approveUrl) && isTelegramInlineButtonUrl(rejectUrl);
   const messageLines = [input.text ?? "Payment approval required"];
   if (input.chatId) messageLines.push(`Telegram Chat ID: ${input.chatId}`);
@@ -29016,6 +29021,23 @@ function ensureRuntimeAgent(sdk, agentId, seed) {
     agentId,
     policyId: seed.policyId
   });
+}
+function decodeApprovalState(rawState) {
+  if (!rawState) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(rawState, "base64url").toString("utf8"));
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function restoreStatelessApproval(sdk, token, state) {
+  if (!state?.approval || state.approval.approvalToken !== token) {
+    return null;
+  }
+  ensureRuntimeAgent(sdk, state.approval.agentId, state.runtimeAgent);
+  return sdk.restoreApprovalRequest(state.approval);
 }
 function isUserRuntimeError(message) {
   return message.includes("Agent not found") || message.includes("session private key is not stored locally") || message.includes("session key is revoked") || message.includes("session key is expired") || message.includes("does not match the selected agent session key");
@@ -29390,7 +29412,11 @@ var routes = [
           approvalToken: approvalRequest.approvalToken,
           text: parsed.kind === "contract_call" ? `Approval required for agent ${body.agentId}: call ${parsed.target}. Reason: ${parsed.reason}` : parsed.kind === "deepbook_swap" ? `Approval required for agent ${body.agentId}: swap ${parsed.amountInput} ${parsed.inputSymbol} to ${parsed.outputSymbol} via DeepBook. Reason: ${parsed.reason}` : `Approval required for agent ${body.agentId}: ${parsed.amountInput} to ${parsed.recipient}. Reason: ${parsed.reason}`,
           chatId: resolvedChatId,
-          walletAddress: body.walletAddress
+          walletAddress: body.walletAddress,
+          state: {
+            approval: approvalRequest,
+            runtimeAgent: body.runtimeAgent
+          }
         }) : { sent: false, error: "No Telegram chat ID was provided and no binding was found for the wallet address." };
       }
       return ok({
@@ -29414,7 +29440,8 @@ var routes = [
       const action = url.searchParams.get("action");
       if (!token || action !== "approve" && action !== "reject") return fail("token and action are required");
       const sdk = getSdk();
-      const approval = sdk.getApprovalRequestByToken(token);
+      const state = decodeApprovalState(url.searchParams.get("state"));
+      const approval = sdk.getApprovalRequestByToken(token) ?? restoreStatelessApproval(sdk, token, state);
       if (!approval) throw new Error("Approval request not found");
       const data = action === "approve" ? await sdk.approvePaymentRequest(token, { requestedBy: "telegram-link" }) : sdk.rejectPaymentRequest(token, { requestedBy: "telegram-link" });
       const approvalData = data;

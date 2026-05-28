@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import http from "http";
 import { getSdk } from "./config";
+import type { ApprovalRequest } from "@sui-agent-pay/sdk";
 import { fail, ok, readJson } from "./api";
 import { buildDeepBookSwapMetadata } from "./deepbook";
 import { buildDemoAgentTrace, createTaskId, parseAgentInstruction } from "./demo-agent";
@@ -35,6 +36,11 @@ type RuntimeAgentSeed = {
   createdAt?: string;
   agentId?: string;
   policyId?: string;
+};
+
+type ApprovalState = {
+  approval?: ApprovalRequest;
+  runtimeAgent?: RuntimeAgentSeed;
 };
 
 function sanitizeAgent(agent: {
@@ -93,6 +99,27 @@ function ensureRuntimeAgent(sdk: ReturnType<typeof getSdk>, agentId: string, see
     agentId,
     policyId: seed.policyId,
   });
+}
+
+function decodeApprovalState(rawState: string | null): ApprovalState | null {
+  if (!rawState) return null;
+
+  try {
+    const parsed = JSON.parse(Buffer.from(rawState, "base64url").toString("utf8")) as ApprovalState;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function restoreStatelessApproval(sdk: ReturnType<typeof getSdk>, token: string, state: ApprovalState | null) {
+  if (!state?.approval || state.approval.approvalToken !== token) {
+    return null;
+  }
+
+  ensureRuntimeAgent(sdk, state.approval.agentId, state.runtimeAgent);
+  return sdk.restoreApprovalRequest(state.approval);
 }
 
 function isUserRuntimeError(message: string) {
@@ -559,6 +586,10 @@ const routes: Route[] = [
                     : `Approval required for agent ${body.agentId}: ${parsed.amountInput} to ${parsed.recipient}. Reason: ${parsed.reason}`,
               chatId: resolvedChatId,
               walletAddress: body.walletAddress,
+              state: {
+                approval: approvalRequest,
+                runtimeAgent: body.runtimeAgent,
+              },
             })
           : { sent: false, error: "No Telegram chat ID was provided and no binding was found for the wallet address." };
       }
@@ -585,7 +616,8 @@ const routes: Route[] = [
       if (!token || (action !== "approve" && action !== "reject")) return fail("token and action are required");
 
       const sdk = getSdk();
-      const approval = sdk.getApprovalRequestByToken(token);
+      const state = decodeApprovalState(url.searchParams.get("state"));
+      const approval = sdk.getApprovalRequestByToken(token) ?? restoreStatelessApproval(sdk, token, state);
       if (!approval) throw new Error("Approval request not found");
       const data =
         action === "approve"

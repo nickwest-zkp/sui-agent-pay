@@ -1038,6 +1038,11 @@ export class AgentPaySDK {
     return this.storage.getApprovalRequestByToken(token);
   }
 
+  restoreApprovalRequest(request: ApprovalRequest) {
+    this.storage.saveApprovalRequest(request);
+    return request;
+  }
+
   async approvePaymentRequest(
     approvalToken: string,
     options?: { note?: string; requestedBy?: string }

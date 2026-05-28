@@ -87,10 +87,14 @@ export async function sendTelegramApprovalRequest(input: {
   text?: string;
   chatId?: string;
   walletAddress?: string;
+  state?: unknown;
 }) {
   const appBaseUrl = getAppBaseUrl();
-  const approveUrl = `${appBaseUrl}/api/tg/approve?token=${encodeURIComponent(input.approvalToken)}&action=approve`;
-  const rejectUrl = `${appBaseUrl}/api/tg/approve?token=${encodeURIComponent(input.approvalToken)}&action=reject`;
+  const stateParam = input.state
+    ? `&state=${Buffer.from(JSON.stringify(input.state), "utf8").toString("base64url")}`
+    : "";
+  const approveUrl = `${appBaseUrl}/api/tg/approve?token=${encodeURIComponent(input.approvalToken)}&action=approve${stateParam}`;
+  const rejectUrl = `${appBaseUrl}/api/tg/approve?token=${encodeURIComponent(input.approvalToken)}&action=reject${stateParam}`;
   const supportsInlineButtons = isTelegramInlineButtonUrl(approveUrl) && isTelegramInlineButtonUrl(rejectUrl);
 
   const messageLines = [input.text ?? "Payment approval required"];
